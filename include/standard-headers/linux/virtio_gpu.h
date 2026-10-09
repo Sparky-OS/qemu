@@ -72,6 +72,10 @@
  * must be aligned to that value.
  */
 #define VIRTIO_GPU_F_BLOB_ALIGNMENT      5
+/*
+ * VIRTIO_GPU_CMD_SET_SCANOUT_STEREO
+ */
+#define VIRTIO_GPU_F_STEREO              6
 
 enum virtio_gpu_ctrl_type {
 	VIRTIO_GPU_UNDEFINED = 0,
@@ -91,6 +95,7 @@ enum virtio_gpu_ctrl_type {
 	VIRTIO_GPU_CMD_RESOURCE_ASSIGN_UUID,
 	VIRTIO_GPU_CMD_RESOURCE_CREATE_BLOB,
 	VIRTIO_GPU_CMD_SET_SCANOUT_BLOB,
+	VIRTIO_GPU_CMD_SET_SCANOUT_STEREO,
 
 	/* 3d commands */
 	VIRTIO_GPU_CMD_CTX_CREATE = 0x0200,
@@ -437,6 +442,34 @@ struct virtio_gpu_set_scanout_blob {
 	uint32_t padding;
 	uint32_t strides[4];
 	uint32_t offsets[4];
+};
+
+/*
+ * Stereo layouts: the 3D structures of HDMI 1.4b, numbered like the
+ * DRM_MODE_FLAG_3D_* mode flags (shifted right by 14).
+ */
+#define VIRTIO_GPU_STEREO_NONE                   0
+#define VIRTIO_GPU_STEREO_FRAME_PACKING          1
+#define VIRTIO_GPU_STEREO_FIELD_ALTERNATIVE      2
+#define VIRTIO_GPU_STEREO_LINE_ALTERNATIVE       3
+#define VIRTIO_GPU_STEREO_SIDE_BY_SIDE_FULL      4
+#define VIRTIO_GPU_STEREO_L_DEPTH                5
+#define VIRTIO_GPU_STEREO_L_DEPTH_GFX_GFX_DEPTH  6
+#define VIRTIO_GPU_STEREO_TOP_AND_BOTTOM         7
+#define VIRTIO_GPU_STEREO_SIDE_BY_SIDE_HALF      8
+
+/*
+ * VIRTIO_GPU_CMD_SET_SCANOUT_STEREO: the layout of the following scanouts,
+ * with each view's place in the scanout rectangle and the size it is shown at.
+ */
+struct virtio_gpu_set_scanout_stereo {
+	struct virtio_gpu_ctrl_hdr hdr;
+	uint32_t scanout_id;
+	uint32_t layout;
+	uint32_t view_width;
+	uint32_t view_height;
+	struct virtio_gpu_rect left;
+	struct virtio_gpu_rect right;
 };
 
 /* VIRTIO_GPU_CMD_RESOURCE_MAP_BLOB */
