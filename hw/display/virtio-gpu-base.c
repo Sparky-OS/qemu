@@ -65,6 +65,7 @@ virtio_gpu_base_generate_edid(VirtIOGPUBase *g, int scanout,
         .prefx = g->req_state[scanout].width,
         .prefy = g->req_state[scanout].height,
         .refresh_rate = g->req_state[scanout].refresh_rate,
+        .stereo = virtio_gpu_stereo_enabled(g->conf),
     };
 
     for (output_idx = 0, node = g->conf.outputs;
@@ -275,6 +276,9 @@ virtio_gpu_base_get_features(VirtIODevice *vdev, uint64_t features,
     }
     if (virtio_gpu_resource_uuid_enabled(g->conf)) {
         features |= (1 << VIRTIO_GPU_F_RESOURCE_UUID);
+    }
+    if (virtio_gpu_stereo_enabled(g->conf)) {
+        features |= (1 << VIRTIO_GPU_F_STEREO);
     }
 
     return features;

@@ -840,6 +840,9 @@ virtio_gpu_rutabaga_process_cmd(VirtIOGPU *g,
     case VIRTIO_GPU_CMD_GET_EDID:
         virtio_gpu_get_edid(g, cmd);
         break;
+    case VIRTIO_GPU_CMD_SET_SCANOUT_STEREO:
+        virtio_gpu_set_scanout_stereo(g, cmd);
+        break;
     case VIRTIO_GPU_CMD_RESOURCE_CREATE_BLOB:
         rutabaga_cmd_resource_create_blob(g, cmd);
         break;

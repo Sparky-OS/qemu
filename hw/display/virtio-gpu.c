@@ -257,6 +257,52 @@ void virtio_gpu_get_edid(VirtIOGPU *g,
     virtio_gpu_ctrl_response(g, cmd, &edid.hdr, sizeof(edid));
 }
 
+void virtio_gpu_set_scanout_stereo(VirtIOGPU *g,
+                                   struct virtio_gpu_ctrl_command *cmd)
+{
+    struct virtio_gpu_set_scanout_stereo ss;
+    QemuStereo stereo;
+
+    VIRTIO_GPU_FILL_CMD(ss);
+    virtio_gpu_bswap_32(&ss, sizeof(ss));
+    trace_virtio_gpu_cmd_set_scanout_stereo(ss.scanout_id, ss.layout,
+                                            ss.view_width, ss.view_height,
+                                            ss.right.x, ss.right.y);
+
+    if (!virtio_gpu_stereo_enabled(g->parent_obj.conf)) {
+        cmd->error = VIRTIO_GPU_RESP_ERR_UNSPEC;
+        return;
+    }
+    if (ss.scanout_id >= g->parent_obj.conf.max_outputs) {
+        qemu_log_mask(LOG_GUEST_ERROR, "%s: illegal scanout id specified %d",
+                      __func__, ss.scanout_id);
+        cmd->error = VIRTIO_GPU_RESP_ERR_INVALID_SCANOUT_ID;
+        return;
+    }
+    if (ss.layout > VIRTIO_GPU_STEREO_SIDE_BY_SIDE_HALF ||
+        ss.view_width > UINT16_MAX || ss.view_height > UINT16_MAX ||
+        ss.left.x > INT16_MAX || ss.left.y > INT16_MAX ||
+        ss.left.width > UINT16_MAX || ss.left.height > UINT16_MAX ||
+        ss.right.x > INT16_MAX || ss.right.y > INT16_MAX ||
+        ss.right.width > UINT16_MAX || ss.right.height > UINT16_MAX) {
+        qemu_log_mask(LOG_GUEST_ERROR, "%s: illegal stereo layout %d",
+                      __func__, ss.layout);
+        cmd->error = VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER;
+        return;
+    }
+
+    stereo = (QemuStereo) {
+        .layout = ss.layout,
+        .width = ss.view_width,
+        .height = ss.view_height,
+    };
+    qemu_rect_init(&stereo.left, ss.left.x, ss.left.y,
+                   ss.left.width, ss.left.height);
+    qemu_rect_init(&stereo.right, ss.right.x, ss.right.y,
+                   ss.right.width, ss.right.height);
+    qemu_console_set_stereo(g->parent_obj.scanout[ss.scanout_id].con, &stereo);
+}
+
 static bool calc_image_hostmem(pixman_format_code_t pformat,
                                uint32_t width, uint32_t height,
                                uint32_t *hostmem, uint32_t *rowstride_bytes)
@@ -437,6 +483,7 @@ void virtio_gpu_disable_scanout(VirtIOGPU *g, int scanout_id)
 
     virtio_gpu_release_scanout_dmabuf(g, scanout_id);
     qemu_console_gl_scanout_disable(scanout->con);
+    qemu_console_set_stereo(scanout->con, NULL);
     qemu_console_set_surface(scanout->con, NULL);
     scanout->resource_id = 0;
     scanout->ds = NULL;
@@ -1188,6 +1235,9 @@ void virtio_gpu_simple_process_cmd(VirtIOGPU *g,
         }
         virtio_gpu_set_scanout_blob(g, cmd);
         break;
+    case VIRTIO_GPU_CMD_SET_SCANOUT_STEREO:
+        virtio_gpu_set_scanout_stereo(g, cmd);
+        break;
     case VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING:
         virtio_gpu_resource_attach_backing(g, cmd);
         break;
@@ -1930,6 +1980,8 @@ static const Property virtio_gpu_properties[] = {
                      256 * MiB),
     DEFINE_PROP_BIT("blob", VirtIOGPU, parent_obj.conf.flags,
                     VIRTIO_GPU_FLAG_BLOB_ENABLED, false),
+    DEFINE_PROP_BIT("stereo", VirtIOGPU, parent_obj.conf.flags,
+                    VIRTIO_GPU_FLAG_STEREO_ENABLED, false),
     DEFINE_PROP_SIZE("hostmem", VirtIOGPU, parent_obj.conf.hostmem, 0),
     DEFINE_PROP_UINT8("x-scanout-vmstate-version", VirtIOGPU, scanout_vmstate_version, 2),
 };

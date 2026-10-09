@@ -1129,6 +1129,9 @@ void virtio_gpu_virgl_process_cmd(VirtIOGPU *g,
     case VIRTIO_GPU_CMD_GET_EDID:
         virtio_gpu_get_edid(g, cmd);
         break;
+    case VIRTIO_GPU_CMD_SET_SCANOUT_STEREO:
+        virtio_gpu_set_scanout_stereo(g, cmd);
+        break;
 #if VIRGL_VERSION_MAJOR >= 1
     case VIRTIO_GPU_CMD_RESOURCE_CREATE_BLOB:
         virgl_cmd_resource_create_blob(g, cmd);

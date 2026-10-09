@@ -112,6 +112,7 @@ enum virtio_gpu_base_conf_flags {
     VIRTIO_GPU_FLAG_VENUS_ENABLED,
     VIRTIO_GPU_FLAG_RESOURCE_UUID_ENABLED,
     VIRTIO_GPU_FLAG_DRM_ENABLED,
+    VIRTIO_GPU_FLAG_STEREO_ENABLED,
 };
 
 #define virtio_gpu_virgl_enabled(_cfg) \
@@ -136,6 +137,8 @@ enum virtio_gpu_base_conf_flags {
     (_cfg.flags & (1 << VIRTIO_GPU_FLAG_VENUS_ENABLED))
 #define virtio_gpu_drm_enabled(_cfg) \
     (_cfg.flags & (1 << VIRTIO_GPU_FLAG_DRM_ENABLED))
+#define virtio_gpu_stereo_enabled(_cfg) \
+    (_cfg.flags & (1 << VIRTIO_GPU_FLAG_STEREO_ENABLED))
 
 struct virtio_gpu_base_conf {
     uint32_t max_outputs;
@@ -349,6 +352,8 @@ void virtio_gpu_get_display_info(VirtIOGPU *g,
                                  struct virtio_gpu_ctrl_command *cmd);
 void virtio_gpu_get_edid(VirtIOGPU *g,
                          struct virtio_gpu_ctrl_command *cmd);
+void virtio_gpu_set_scanout_stereo(VirtIOGPU *g,
+                                   struct virtio_gpu_ctrl_command *cmd);
 int virtio_gpu_create_mapping_iov(VirtIOGPU *g,
                                   uint32_t nr_entries, uint32_t offset,
                                   struct virtio_gpu_ctrl_command *cmd,
