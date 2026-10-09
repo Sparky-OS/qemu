@@ -160,6 +160,22 @@ if gtk.found()
   gtk_ss.add(when: x11, if_true: files('x_keymap.c'))
   gtk_ss.add(when: opengl, if_true: files('gtk-gl-area.c'))
   gtk_ss.add(when: [x11, opengl], if_true: files('gtk-egl.c'))
+  if stereo_declare.found()
+    viewporter_xml = wayland_protocols.get_variable(pkgconfig: 'pkgdatadir') / \
+                     'stable' / 'viewporter' / 'viewporter.xml'
+    viewporter_h = custom_target('viewporter-client-protocol.h',
+                                 input: viewporter_xml,
+                                 output: 'viewporter-client-protocol.h',
+                                 command: [wayland_scanner, 'client-header',
+                                           '@INPUT@', '@OUTPUT@'])
+    viewporter_c = custom_target('viewporter-protocol.c',
+                                 input: viewporter_xml,
+                                 output: 'viewporter-protocol.c',
+                                 command: [wayland_scanner, 'private-code',
+                                           '@INPUT@', '@OUTPUT@'])
+    gtk_ss.add(stereo_declare, wayland_client,
+               files('wayland-stereo.c'), viewporter_h, viewporter_c)
+  endif
   ui_modules += {'gtk' : gtk_ss}
 endif
 

@@ -28,6 +28,9 @@
 #ifdef CONFIG_VTE
 #include "qemu/fifo8.h"
 #endif
+#ifdef CONFIG_STEREO_DECLARE
+#include "ui/wayland-stereo.h"
+#endif
 
 #define MAX_VCS 10
 
@@ -44,6 +47,10 @@ typedef struct VirtualGfxConsole {
     double preferred_scale;
     double scale_x;
     double scale_y;
+    QemuStereo stereo;
+#if defined(CONFIG_STEREO_DECLARE)
+    QemuWaylandStereo *wl_stereo;
+#endif
 #if defined(CONFIG_OPENGL)
     QemuGLShader *gls;
     EGLContext ectx;

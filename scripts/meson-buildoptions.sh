@@ -200,6 +200,8 @@ meson_options_help() {
   printf "%s\n" '  spice           Spice server support'
   printf "%s\n" '  spice-protocol  Spice protocol support'
   printf "%s\n" '  stack-protector compiler-provided stack protection'
+  printf "%s\n" '  stereo-declare  stereo scanouts declared to the Wayland compositor'
+  printf "%s\n" '                  (libstereo-declare)'
   printf "%s\n" '  tcg             TCG support'
   printf "%s\n" '  tests           Build the test suite'
   printf "%s\n" '  tools           build support utilities that come with QEMU'
@@ -519,6 +521,8 @@ _meson_option_parse() {
     --disable-spice-protocol) printf "%s" -Dspice_protocol=disabled ;;
     --enable-stack-protector) printf "%s" -Dstack_protector=enabled ;;
     --disable-stack-protector) printf "%s" -Dstack_protector=disabled ;;
+    --enable-stereo-declare) printf "%s" -Dstereo_declare=enabled ;;
+    --disable-stereo-declare) printf "%s" -Dstereo_declare=disabled ;;
     --enable-strict-rust-lints) printf "%s" -Dstrict_rust_lints=true ;;
     --disable-strict-rust-lints) printf "%s" -Dstrict_rust_lints=false ;;
     --enable-strip) printf "%s" -Dstrip=true ;;

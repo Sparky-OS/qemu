@@ -272,6 +272,78 @@ static void gd_update_caption(GtkDisplayState *s)
     g_free(prefix);
 }
 
+/* The size the guest display is shown at: one view of a stereo scanout. */
+static void gd_fb_size(VirtualConsole *vc, int *fbw, int *fbh)
+{
+    if (vc->gfx.stereo.layout) {
+        *fbw = vc->gfx.stereo.width;
+        *fbh = vc->gfx.stereo.height;
+    } else {
+        *fbw = surface_width(vc->gfx.ds);
+        *fbh = surface_height(vc->gfx.ds);
+    }
+}
+
+static bool gd_stereo_view_valid(DisplaySurface *ds, const QemuRect *view)
+{
+    return view->x >= 0 && view->y >= 0 &&
+           view->x + view->width <= surface_width(ds) &&
+           view->y + view->height <= surface_height(ds);
+}
+
+static void gd_update_stereo(VirtualConsole *vc)
+{
+    const QemuStereo *stereo = qemu_console_get_stereo(vc->gfx.dcl.con);
+
+    if (stereo && stereo->width && stereo->height &&
+        gd_stereo_view_valid(vc->gfx.ds, &stereo->left) &&
+        gd_stereo_view_valid(vc->gfx.ds, &stereo->right)) {
+        vc->gfx.stereo = *stereo;
+    } else {
+        vc->gfx.stereo = (QemuStereo) { 0 };
+    }
+#if defined(CONFIG_STEREO_DECLARE)
+    if (!vc->gfx.stereo.layout && vc->gfx.wl_stereo) {
+        qemu_wayland_stereo_hide(vc->gfx.wl_stereo);
+    }
+#endif
+}
+
+/*
+ * Both views, side by side and declared, on a subsurface over the area
+ * (x, y, w, h) of the widget.  Without one, the widget shows the left view.
+ */
+static void gd_stereo_draw(VirtualConsole *vc, GtkWidget *widget,
+                           int x, int y, int w, int h)
+{
+#if defined(CONFIG_STEREO_DECLARE) && defined(GDK_WINDOWING_WAYLAND)
+    GdkDisplay *dpy = gtk_widget_get_display(widget);
+    GtkWidget *toplevel = gtk_widget_get_toplevel(widget);
+    struct wl_surface *parent;
+    int tx, ty;
+
+    if (!GDK_IS_WAYLAND_DISPLAY(dpy) ||
+        !gtk_widget_translate_coordinates(widget, toplevel, x, y, &tx, &ty)) {
+        return;
+    }
+    parent = gdk_wayland_window_get_wl_surface(gtk_widget_get_window(toplevel));
+    if (vc->gfx.wl_stereo &&
+        qemu_wayland_stereo_get_parent(vc->gfx.wl_stereo) != parent) {
+        qemu_wayland_stereo_free(vc->gfx.wl_stereo);
+        vc->gfx.wl_stereo = NULL;
+    }
+    if (!vc->gfx.wl_stereo) {
+        vc->gfx.wl_stereo =
+            qemu_wayland_stereo_new(gdk_wayland_display_get_wl_display(dpy),
+                                    parent);
+    }
+    if (vc->gfx.wl_stereo) {
+        qemu_wayland_stereo_show(vc->gfx.wl_stereo, vc->gfx.ds->image,
+                                 &vc->gfx.stereo, tx, ty, w, h);
+    }
+#endif
+}
+
 static void gd_update_geometry_hints(VirtualConsole *vc)
 {
     GtkDisplayState *s = vc->s;
@@ -286,8 +358,11 @@ static void gd_update_geometry_hints(VirtualConsole *vc)
         }
         double scale_x = s->free_scale ? VC_SCALE_MIN : vc->gfx.scale_x;
         double scale_y = s->free_scale ? VC_SCALE_MIN : vc->gfx.scale_y;
-        geo.min_width  = surface_width(vc->gfx.ds) * scale_x;
-        geo.min_height = surface_height(vc->gfx.ds) * scale_y;
+        int fbw, fbh;
+
+        gd_fb_size(vc, &fbw, &fbh);
+        geo.min_width  = fbw * scale_x;
+        geo.min_height = fbh * scale_y;
         mask |= GDK_HINT_MIN_SIZE;
         geo_widget = vc->gfx.drawing_area;
         gtk_widget_set_size_request(geo_widget, geo.min_width, geo.min_height);
@@ -416,6 +491,11 @@ static void gd_update(DisplayChangeListener *dcl,
                                fbx, fby, 0, 0, fbx, fby, fbw, fbh);
     }
 
+    if (vc->gfx.stereo.layout) {
+        gtk_widget_queue_draw(vc->gfx.drawing_area);
+        return;
+    }
+
     wx1 = floor(fbx * vc->gfx.scale_x);
     wy1 = floor(fby * vc->gfx.scale_y);
 
@@ -504,7 +584,8 @@ static void gd_switch(DisplayChangeListener *dcl,
                       DisplaySurface *surface)
 {
     VirtualConsole *vc = container_of(dcl, VirtualConsole, gfx.dcl);
-    bool resized = true;
+    int old_fbw = 0, old_fbh = 0, fbw, fbh;
+    bool resized;
 
     trace_gd_switch(vc->label, surface_width(surface), surface_height(surface));
 
@@ -517,12 +598,13 @@ static void gd_switch(DisplayChangeListener *dcl,
         vc->gfx.convert = NULL;
     }
 
-    if (vc->gfx.ds &&
-        surface_width(vc->gfx.ds) == surface_width(surface) &&
-        surface_height(vc->gfx.ds) == surface_height(surface)) {
-        resized = false;
+    if (vc->gfx.ds) {
+        gd_fb_size(vc, &old_fbw, &old_fbh);
     }
     vc->gfx.ds = surface;
+    gd_update_stereo(vc);
+    gd_fb_size(vc, &fbw, &fbh);
+    resized = fbw != old_fbw || fbh != old_fbh;
 
     if (surface_format(surface) == PIXMAN_x8r8g8b8) {
         /*
@@ -952,8 +1034,7 @@ static gboolean gd_draw_event(GtkWidget *widget, cairo_t *cr, void *opaque)
 
     gd_update_monitor_refresh_rate(vc, vc->window ? vc->window : s->window);
 
-    fbw = surface_width(vc->gfx.ds);
-    fbh = surface_height(vc->gfx.ds);
+    gd_fb_size(vc, &fbw, &fbh);
 
     ww_widget = gdk_window_get_width(gtk_widget_get_window(widget));
     wh_widget = gdk_window_get_height(gtk_widget_get_window(widget));
@@ -982,6 +1063,28 @@ static gboolean gd_draw_event(GtkWidget *widget, cairo_t *cr, void *opaque)
                     -1 * ww_surface, wh_surface);
     cairo_fill(cr);
 
+    if (vc->gfx.stereo.layout) {
+        const QemuRect *left = &vc->gfx.stereo.left;
+        cairo_surface_t *view;
+
+        /* the left view alone, so scaling never reaches into the right one */
+        view = cairo_surface_create_for_rectangle(vc->gfx.surface,
+                                                  left->x, left->y,
+                                                  left->width, left->height);
+        cairo_rectangle(cr, wx_offset, wy_offset, ww_surface, wh_surface);
+        cairo_clip(cr);
+        cairo_translate(cr, wx_offset, wy_offset);
+        cairo_scale(cr, vc->gfx.scale_x * fbw / left->width,
+                    vc->gfx.scale_y * fbh / left->height);
+        cairo_set_source_surface(cr, view, 0, 0);
+        cairo_pattern_set_extend(cairo_get_source(cr), CAIRO_EXTEND_PAD);
+        cairo_paint(cr);
+        cairo_surface_destroy(view);
+        gd_stereo_draw(vc, widget, wx_offset, wy_offset,
+                       ww_surface, wh_surface);
+        return TRUE;
+    }
+
     cairo_scale(cr, vc->gfx.scale_x, vc->gfx.scale_y);
     cairo_set_source_surface(cr, vc->gfx.surface,
                              wx_offset / vc->gfx.scale_x,
@@ -996,7 +1099,7 @@ static gboolean gd_motion_event(GtkWidget *widget, GdkEventMotion *motion,
 {
     VirtualConsole *vc = opaque;
     GtkDisplayState *s = vc->s;
-    int fbx, fby;
+    int fbx, fby, fbw, fbh;
     int wx_offset, wy_offset;
     int wh_surface, ww_surface;
     int ww_widget, wh_widget;
@@ -1005,8 +1108,9 @@ static gboolean gd_motion_event(GtkWidget *widget, GdkEventMotion *motion,
         return TRUE;
     }
 
-    ww_surface = surface_width(vc->gfx.ds) * vc->gfx.scale_x;
-    wh_surface = surface_height(vc->gfx.ds) * vc->gfx.scale_y;
+    gd_fb_size(vc, &fbw, &fbh);
+    ww_surface = fbw * vc->gfx.scale_x;
+    wh_surface = fbh * vc->gfx.scale_y;
     ww_widget = gtk_widget_get_allocated_width(widget);
     wh_widget = gtk_widget_get_allocated_height(widget);
 
@@ -1035,15 +1139,11 @@ static gboolean gd_motion_event(GtkWidget *widget, GdkEventMotion *motion,
                           gtk_widget_get_scale_factor(widget), fbx, fby);
 
     if (qemu_input_is_absolute(vc->gfx.dcl.con)) {
-        if (fbx < 0 || fby < 0 ||
-            fbx >= surface_width(vc->gfx.ds) ||
-            fby >= surface_height(vc->gfx.ds)) {
+        if (fbx < 0 || fby < 0 || fbx >= fbw || fby >= fbh) {
             return TRUE;
         }
-        qemu_input_queue_abs(vc->gfx.dcl.con, INPUT_AXIS_X, fbx,
-                             0, surface_width(vc->gfx.ds));
-        qemu_input_queue_abs(vc->gfx.dcl.con, INPUT_AXIS_Y, fby,
-                             0, surface_height(vc->gfx.ds));
+        qemu_input_queue_abs(vc->gfx.dcl.con, INPUT_AXIS_X, fbx, 0, fbw);
+        qemu_input_queue_abs(vc->gfx.dcl.con, INPUT_AXIS_Y, fby, 0, fbh);
         qemu_input_event_sync();
     } else if (s->last_set && s->ptr_owner == vc) {
         qemu_input_queue_rel(vc->gfx.dcl.con, INPUT_AXIS_X, fbx - s->last_x);
@@ -1202,6 +1302,7 @@ static gboolean gd_touch_event(GtkWidget *widget, GdkEventTouch *touch,
     Error *err = NULL;
     uint64_t num_slot = GPOINTER_TO_UINT(touch->sequence);
     int type = -1;
+    int fbw, fbh;
 
     switch (touch->type) {
     case GDK_TOUCH_BEGIN:
@@ -1219,9 +1320,9 @@ static gboolean gd_touch_event(GtkWidget *widget, GdkEventTouch *touch,
         return FALSE;
     }
 
+    gd_fb_size(vc, &fbw, &fbh);
     qemu_input_touch_event(vc->gfx.dcl.con, touch_slots,
-                           num_slot, surface_width(vc->gfx.ds),
-                           surface_height(vc->gfx.ds), touch->x,
+                           num_slot, fbw, fbh, touch->x,
                            touch->y, type, &err);
     if (err) {
         warn_report_err(err);
@@ -2745,6 +2846,9 @@ static void gd_vc_free(void *p)
         }
 #endif
         qkbd_state_free(vc->gfx.kbd);
+#if defined(CONFIG_STEREO_DECLARE)
+        qemu_wayland_stereo_free(vc->gfx.wl_stereo);
+#endif
         if (vc->gfx.surface) {
             cairo_surface_destroy(vc->gfx.surface);
         }

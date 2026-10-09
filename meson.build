@@ -1945,6 +1945,27 @@ endif
 
 x11 = dependency('x11', method: 'pkg-config', required: gtkx11.found())
 
+stereo_declare = not_found
+wayland_client = not_found
+wayland_protocols = not_found
+wayland_scanner = not_found
+if get_option('stereo_declare') \
+    .require(gtk.found(),
+             error_message: 'stereo_declare requires the GTK UI') \
+    .allowed()
+  wayland_client = dependency('wayland-client', method: 'pkg-config',
+                              required: get_option('stereo_declare'))
+  wayland_protocols = dependency('wayland-protocols', method: 'pkg-config',
+                                 required: get_option('stereo_declare'))
+  wayland_scanner = find_program('wayland-scanner',
+                                 required: get_option('stereo_declare'))
+  if wayland_client.found() and wayland_protocols.found() and \
+     wayland_scanner.found()
+    stereo_declare = dependency('stereo-declare', method: 'pkg-config',
+                                required: get_option('stereo_declare'))
+  endif
+endif
+
 png = not_found
 if get_option('png').allowed() and have_system
    png = dependency('libpng', version: '>=1.6.34', required: get_option('png'),
@@ -2461,6 +2482,7 @@ config_host_data.set('CONFIG_CURSES', curses.found())
 config_host_data.set('CONFIG_GBM', gbm.found())
 config_host_data.set('CONFIG_GIO', gio.found())
 config_host_data.set('CONFIG_GTK', gtk.found())
+config_host_data.set('CONFIG_STEREO_DECLARE', stereo_declare.found())
 config_host_data.set('CONFIG_VTE', vte.found())
 config_host_data.set('CONFIG_HEXAGON_IDEF_PARSER', get_option('hexagon_idef_parser'))
 config_host_data.set('CONFIG_LIBATTR', have_old_libattr)
@@ -4932,6 +4954,7 @@ summary_info += {'D-Bus display':     dbus_display}
 summary_info += {'SDL support':       sdl}
 summary_info += {'SDL image support': sdl_image}
 summary_info += {'GTK support':       gtk}
+summary_info += {'stereo declaration': stereo_declare}
 summary_info += {'pixman':            pixman}
 summary_info += {'VTE support':       vte}
 summary_info += {'PNG support':       png}
