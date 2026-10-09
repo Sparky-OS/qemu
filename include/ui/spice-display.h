@@ -84,6 +84,9 @@ typedef struct SimpleSpiceCursor SimpleSpiceCursor;
 
 struct SimpleSpiceDisplay {
     DisplaySurface *ds;
+#ifdef CONFIG_SPICE_STEREO
+    QemuStereo stereo;
+#endif
     DisplayGLCtx dgc;
     DisplayChangeListener dcl;
     void *buf;

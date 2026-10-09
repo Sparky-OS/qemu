@@ -390,11 +390,43 @@ void qemu_spice_display_update(SimpleSpiceDisplay *ssd,
     qemu_spice_rect_union(&ssd->dirty, &update_area);
 }
 
+static void qemu_spice_rect(QXLRect *dst, const QemuRect *src)
+{
+    dst->left = src->x;
+    dst->top = src->y;
+    dst->right = src->x + src->width;
+    dst->bottom = src->y + src->height;
+}
+
+/* Tells clients how the following frames carry a stereo pair, when it changes. */
+static void qemu_spice_update_stereo(SimpleSpiceDisplay *ssd)
+{
+#ifdef CONFIG_SPICE_STEREO
+    const QemuStereo *stereo = qemu_console_get_stereo(ssd->dcl.con);
+    QemuStereo none = { 0 };
+    QXLRect left, right;
+
+    if (!stereo) {
+        stereo = &none;
+    }
+    if (memcmp(stereo, &ssd->stereo, sizeof(*stereo)) == 0) {
+        return;
+    }
+    ssd->stereo = *stereo;
+    qemu_spice_rect(&left, &stereo->left);
+    qemu_spice_rect(&right, &stereo->right);
+    spice_qxl_set_stereo(&ssd->qxl, stereo->layout,
+                         stereo->width, stereo->height, &left, &right);
+#endif
+}
+
 void qemu_spice_display_switch(SimpleSpiceDisplay *ssd,
                                DisplaySurface *surface)
 {
     SimpleSpiceUpdate *update;
     bool need_destroy;
+
+    qemu_spice_update_stereo(ssd);
 
     if (ssd->surface &&
         surface_width(surface) == pixman_image_get_width(ssd->surface) &&
@@ -1066,6 +1098,7 @@ static void qemu_spice_gl_scanout_disable(DisplayChangeListener *dcl)
     }
     spice_server_gl_scanout(&ssd->qxl, NULL, 0, 0, NULL, NULL, 0, DRM_FORMAT_INVALID,
                             DRM_FORMAT_MOD_INVALID, false);
+    qemu_spice_update_stereo(ssd);
     qemu_spice_gl_monitor_config(ssd, 0, 0, 0, 0);
     ssd->have_surface = false;
     ssd->have_scanout = false;
@@ -1093,6 +1126,7 @@ static void qemu_spice_gl_scanout_texture(DisplayChangeListener *dcl,
     }
 
     trace_qemu_spice_gl_scanout_texture(ssd->qxl.id, w, h, fourcc);
+    qemu_spice_update_stereo(ssd);
 
     if (spice_remote_client && modifier != DRM_FORMAT_MOD_LINEAR) {
         egl_fb_destroy(&ssd->guest_fb);
@@ -1125,6 +1159,7 @@ static void qemu_spice_gl_scanout_dmabuf(DisplayChangeListener *dcl,
 
     ssd->guest_dmabuf = dmabuf;
     ssd->guest_dmabuf_refresh = true;
+    qemu_spice_update_stereo(ssd);
 
     ssd->have_surface = false;
     ssd->have_scanout = true;

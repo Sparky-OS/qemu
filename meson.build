@@ -2576,6 +2576,8 @@ config_host_data.set('CONFIG_SPICE_PROTOCOL_MINOR', spice_protocol.version().spl
 config_host_data.set('CONFIG_SPICE_PROTOCOL_MICRO', spice_protocol.version().split('.')[2])
 endif
 config_host_data.set('CONFIG_SPICE', spice.found())
+config_host_data.set('CONFIG_SPICE_STEREO', spice.found() and
+                     cc.has_function('spice_qxl_set_stereo', dependencies: spice))
 config_host_data.set('CONFIG_X11', x11.found())
 config_host_data.set('CONFIG_DBUS_DISPLAY', dbus_display)
 config_host_data.set('CONFIG_CFI', get_option('cfi'))
