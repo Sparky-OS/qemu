@@ -48,6 +48,31 @@ static const struct edid_mode {
     { .xres =  640,   .yres =  480,   .byte  = 35,   .bit = 5 },
 };
 
+/*
+ * HDMI 1.4b 3D: with 3D_present, the sink takes frame packing and
+ * top-and-bottom of 1080p24 and 720p50/60, and side by side (half) of
+ * 1080i50/60 (the mandatory formats).  1080p60 lists every 3D structure
+ * that keeps its views apart in one frame.
+ */
+#define HDMI_3D_FRAME_PACKING           0
+#define HDMI_3D_SIDE_BY_SIDE_FULL       3
+#define HDMI_3D_TOP_AND_BOTTOM          6
+#define HDMI_3D_SIDE_BY_SIDE_HALF       8
+
+static const struct edid_stereo_mode {
+    uint32_t xres;
+    uint32_t yres;
+    uint8_t dta;
+    bool all;
+} stereo_modes[] = {
+    { .xres = 1920,   .yres = 1080,   .dta = 16,  .all = true },
+    { .xres = 1920,   .yres = 1080,   .dta = 32 },
+    { .xres = 1280,   .yres =  720,   .dta =  4 },
+    { .xres = 1280,   .yres =  720,   .dta = 19 },
+    { .xres = 1920,   .yres = 1080,   .dta =  5 },
+    { .xres = 1920,   .yres = 1080,   .dta = 20 },
+};
+
 typedef struct Timings {
     uint32_t xfront;
     uint32_t xsync;
@@ -93,6 +118,59 @@ static void edid_ext_dta_mode(uint8_t *dta, uint8_t nr)
     dta[dta[2]] = nr;
     dta[2]++;
     dta[4]++;
+}
+
+static void edid_ext_dta_hdmi_3d(uint8_t *dta, uint32_t maxx, uint32_t maxy)
+{
+    static const uint8_t structures[] = {
+        HDMI_3D_FRAME_PACKING,
+        HDMI_3D_SIDE_BY_SIDE_FULL,
+        HDMI_3D_TOP_AND_BOTTOM,
+        HDMI_3D_SIDE_BY_SIDE_HALF,
+    };
+    uint8_t hdmi_3d[16];
+    uint8_t hdmi_3d_len = 0;
+    uint8_t *vsdb;
+    int i, j;
+
+    for (i = 0; i < ARRAY_SIZE(stereo_modes); i++) {
+        const struct edid_stereo_mode *mode = stereo_modes + i;
+        uint8_t order = dta[4] & 0x1f;
+
+        if ((maxx && mode->xres > maxx) ||
+            (maxy && mode->yres > maxy)) {
+            continue;
+        }
+        edid_ext_dta_mode(dta, mode->dta);
+
+        /* 2D_VIC_order_X counts from the first VIC, up to the 16th */
+        if (!mode->all || order >= 16) {
+            continue;
+        }
+        for (j = 0; j < ARRAY_SIZE(structures); j++) {
+            hdmi_3d[hdmi_3d_len++] = (order << 4) | structures[j];
+            if (structures[j] >= HDMI_3D_SIDE_BY_SIDE_HALF) {
+                /* 3D_Detail_X: horizontal sub-sampling */
+                hdmi_3d[hdmi_3d_len++] = 0x10;
+            }
+        }
+    }
+
+    /* HDMI vendor specific data block */
+    vsdb = dta + dta[2];
+    vsdb[1] = 0x03; /* IEEE OUI 00-0C-03 */
+    vsdb[2] = 0x0c;
+    vsdb[3] = 0x00;
+    vsdb[4] = 0x10; /* physical address 1.0.0.0 */
+    vsdb[5] = 0x00;
+    vsdb[6] = 0x00;
+    vsdb[7] = 340 / 5; /* max TMDS clock (340 MHz) */
+    vsdb[8] = 0x20; /* HDMI_Video_present */
+    vsdb[9] = 0x80; /* 3D_present */
+    vsdb[10] = hdmi_3d_len; /* HDMI_VIC_LEN 0, HDMI_3D_LEN */
+    memcpy(vsdb + 11, hdmi_3d, hdmi_3d_len);
+    vsdb[0] = 0x60 | (10 + hdmi_3d_len);
+    dta[2] += 11 + hdmi_3d_len;
 }
 
 static int edid_std_mode(uint8_t *mode, uint32_t xres, uint32_t yres)
@@ -220,16 +298,16 @@ static void edid_desc_text(uint8_t *desc, uint8_t type,
     desc[5 + len] = '\n';
 }
 
-static void edid_desc_ranges(uint8_t *desc)
+static void edid_desc_ranges(uint8_t *desc, bool stereo)
 {
     edid_desc_type(desc, 0xfd);
 
-    /* vertical (50 -> 125 Hz) */
-    desc[5] =  50;
+    /* vertical (50 -> 125 Hz, from 23 Hz with the 1080p24 3D formats) */
+    desc[5] = stereo ? 23 : 50;
     desc[6] = 125;
 
-    /* horizontal (30 -> 160 kHz) */
-    desc[7] =  30;
+    /* horizontal (30 -> 160 kHz, from 26 kHz with 1080p24) */
+    desc[7] = stereo ? 26 : 30;
     desc[8] = 160;
 
     /* max dot clock (2550 MHz) */
@@ -466,8 +544,8 @@ void qemu_edid_generate(uint8_t *edid, size_t size,
 
     /* =============== basic display parameters =============== */
 
-    /* video input: digital, 8bpc, displayport */
-    edid[20] = 0xa5;
+    /* video input: digital, 8bpc, displayport (hdmi-a for 3D) */
+    edid[20] = info->stereo ? 0xa2 : 0xa5;
 
     /* screen size: undefined */
     edid[21] = width_mm / 10;
@@ -508,12 +586,15 @@ void qemu_edid_generate(uint8_t *edid, size_t size,
     edid_desc_xtra3_std(xtra3);
     desc = edid_desc_next(edid, dta, desc);
     edid_fill_modes(edid, xtra3, dta, info->maxx, info->maxy);
+    if (dta && info->stereo) {
+        edid_ext_dta_hdmi_3d(dta, info->maxx, info->maxy);
+    }
     /*
      * dta video data block is finished at thus point,
      * so dta descriptor offsets don't move any more.
      */
 
-    edid_desc_ranges(desc);
+    edid_desc_ranges(desc, dta && info->stereo);
     desc = edid_desc_next(edid, dta, desc);
 
     if (desc && info->name) {

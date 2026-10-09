@@ -35,6 +35,7 @@ static void usage(FILE *out)
             "    -y <prefy>     set preferred height\n"
             "    -X <maxx>      set maximum width\n"
             "    -Y <maxy>      set maximum height\n"
+            "    -3             add HDMI 3D (stereo) modes\n"
             "\n");
 }
 
@@ -47,7 +48,7 @@ int main(int argc, char *argv[])
     int rc;
 
     for (;;) {
-        rc = getopt(argc, argv, "ho:x:y:X:Y:d:v:n:s:");
+        rc = getopt(argc, argv, "ho:x:y:X:Y:d:v:n:s:3");
         if (rc == -1) {
             break;
         }
@@ -105,6 +106,9 @@ int main(int argc, char *argv[])
             break;
         case 's':
             info.serial = optarg;
+            break;
+        case '3':
+            info.stereo = true;
             break;
         case 'h':
             usage(stdout);
