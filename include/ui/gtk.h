@@ -168,6 +168,10 @@ extern bool gtk_use_gl_area;
 
 /* ui/gtk.c */
 void gd_update_windowsize(VirtualConsole *vc);
+void gd_fb_size(VirtualConsole *vc, int *fbw, int *fbh);
+void gd_update_stereo(VirtualConsole *vc, int w, int h);
+void gd_stereo_draw(VirtualConsole *vc, GtkWidget *widget,
+                    pixman_image_t *frame, int x, int y, int w, int h);
 void gd_update_monitor_refresh_rate(VirtualConsole *vc, GtkWidget *widget);
 void gd_gl_wait_sync(VirtualConsole *vc, void *sync);
 void gd_release_dmabuf(VirtualConsole *vc, QemuDmaBuf *dmabuf);

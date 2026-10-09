@@ -273,7 +273,7 @@ static void gd_update_caption(GtkDisplayState *s)
 }
 
 /* The size the guest display is shown at: one view of a stereo scanout. */
-static void gd_fb_size(VirtualConsole *vc, int *fbw, int *fbh)
+void gd_fb_size(VirtualConsole *vc, int *fbw, int *fbh)
 {
     if (vc->gfx.stereo.layout) {
         *fbw = vc->gfx.stereo.width;
@@ -284,20 +284,20 @@ static void gd_fb_size(VirtualConsole *vc, int *fbw, int *fbh)
     }
 }
 
-static bool gd_stereo_view_valid(DisplaySurface *ds, const QemuRect *view)
+static bool gd_stereo_view_valid(const QemuRect *view, int w, int h)
 {
     return view->x >= 0 && view->y >= 0 &&
-           view->x + view->width <= surface_width(ds) &&
-           view->y + view->height <= surface_height(ds);
+           view->x + view->width <= w && view->y + view->height <= h;
 }
 
-static void gd_update_stereo(VirtualConsole *vc)
+/* The console's stereo layout, kept when both views lie in the w x h frame. */
+void gd_update_stereo(VirtualConsole *vc, int w, int h)
 {
     const QemuStereo *stereo = qemu_console_get_stereo(vc->gfx.dcl.con);
 
     if (stereo && stereo->width && stereo->height &&
-        gd_stereo_view_valid(vc->gfx.ds, &stereo->left) &&
-        gd_stereo_view_valid(vc->gfx.ds, &stereo->right)) {
+        gd_stereo_view_valid(&stereo->left, w, h) &&
+        gd_stereo_view_valid(&stereo->right, w, h)) {
         vc->gfx.stereo = *stereo;
     } else {
         vc->gfx.stereo = (QemuStereo) { 0 };
@@ -310,11 +310,12 @@ static void gd_update_stereo(VirtualConsole *vc)
 }
 
 /*
- * Both views, side by side and declared, on a subsurface over the area
- * (x, y, w, h) of the widget.  Without one, the widget shows the left view.
+ * Both views of frame, side by side and declared, on a subsurface over the
+ * area (x, y, w, h) of the widget.  Without one, the widget shows the left
+ * view.
  */
-static void gd_stereo_draw(VirtualConsole *vc, GtkWidget *widget,
-                           int x, int y, int w, int h)
+void gd_stereo_draw(VirtualConsole *vc, GtkWidget *widget,
+                    pixman_image_t *frame, int x, int y, int w, int h)
 {
 #if defined(CONFIG_STEREO_DECLARE) && defined(GDK_WINDOWING_WAYLAND)
     GdkDisplay *dpy = gtk_widget_get_display(widget);
@@ -338,7 +339,7 @@ static void gd_stereo_draw(VirtualConsole *vc, GtkWidget *widget,
                                     parent);
     }
     if (vc->gfx.wl_stereo) {
-        qemu_wayland_stereo_show(vc->gfx.wl_stereo, vc->gfx.ds->image,
+        qemu_wayland_stereo_show(vc->gfx.wl_stereo, frame,
                                  &vc->gfx.stereo, tx, ty, w, h);
     }
 #endif
@@ -602,7 +603,7 @@ static void gd_switch(DisplayChangeListener *dcl,
         gd_fb_size(vc, &old_fbw, &old_fbh);
     }
     vc->gfx.ds = surface;
-    gd_update_stereo(vc);
+    gd_update_stereo(vc, surface_width(surface), surface_height(surface));
     gd_fb_size(vc, &fbw, &fbh);
     resized = fbw != old_fbw || fbh != old_fbh;
 
@@ -1080,7 +1081,7 @@ static gboolean gd_draw_event(GtkWidget *widget, cairo_t *cr, void *opaque)
         cairo_pattern_set_extend(cairo_get_source(cr), CAIRO_EXTEND_PAD);
         cairo_paint(cr);
         cairo_surface_destroy(view);
-        gd_stereo_draw(vc, widget, wx_offset, wy_offset,
+        gd_stereo_draw(vc, widget, vc->gfx.ds->image, wx_offset, wy_offset,
                        ww_surface, wh_surface);
         return TRUE;
     }

@@ -35,6 +35,54 @@ static void gtk_gl_area_set_scanout_mode(VirtualConsole *vc, bool scanout)
     }
 }
 
+/*
+ * A stereo scanout: the left view in the GL area (what a compositor without
+ * the stereo declaration shows), and the whole frame read back for the
+ * declared subsurface over it.
+ */
+static void gd_gl_area_draw_stereo(VirtualConsole *vc, int gs,
+                                   int x, int y, int w, int h)
+{
+    const QemuRect *left = &vc->gfx.stereo.left;
+    pixman_image_t *frame;
+    uint32_t *data;
+    int stride = vc->gfx.w * 4;
+    int sy0, sy1;
+
+    /* the blit below draws the frame's last row first, as the 2D path does */
+    if (vc->gfx.y0_top) {
+        sy0 = vc->gfx.h - left->y - left->height;
+        sy1 = vc->gfx.h - left->y;
+    } else {
+        sy0 = left->y + left->height;
+        sy1 = left->y;
+    }
+    glBlitFramebuffer(left->x, sy0, left->x + left->width, sy1,
+                      x * gs, y * gs, (x + w) * gs, (y + h) * gs,
+                      GL_COLOR_BUFFER_BIT, GL_NEAREST);
+
+    data = g_malloc((size_t)stride * vc->gfx.h);
+    glPixelStorei(GL_PACK_ALIGNMENT, 4);
+    glReadPixels(0, 0, vc->gfx.w, vc->gfx.h, GL_RGBA, GL_UNSIGNED_BYTE, data);
+    if (vc->gfx.y0_top) {
+        /* rows come bottom up, as egl-headless finds them (egl_fb_blit) */
+        g_autofree uint8_t *row = g_malloc(stride);
+        uint8_t *top = (uint8_t *)data;
+        uint8_t *bottom = top + (size_t)stride * (vc->gfx.h - 1);
+
+        for (; top < bottom; top += stride, bottom -= stride) {
+            memcpy(row, top, stride);
+            memcpy(top, bottom, stride);
+            memcpy(bottom, row, stride);
+        }
+    }
+    frame = pixman_image_create_bits(PIXMAN_x8b8g8r8, vc->gfx.w, vc->gfx.h,
+                                     data, stride);
+    gd_stereo_draw(vc, vc->gfx.drawing_area, frame, x, y, w, h);
+    pixman_image_unref(frame);
+    g_free(data);
+}
+
 /** DisplayState Callbacks (opengl version) **/
 
 void gd_gl_area_draw(VirtualConsole *vc)
@@ -55,8 +103,7 @@ void gd_gl_area_draw(VirtualConsole *vc)
 
     gtk_gl_area_make_current(GTK_GL_AREA(vc->gfx.drawing_area));
     gs = gdk_window_get_scale_factor(gtk_widget_get_window(vc->gfx.drawing_area));
-    fbw = surface_width(vc->gfx.ds);
-    fbh = surface_height(vc->gfx.ds);
+    gd_fb_size(vc, &fbw, &fbh);
     ww = gtk_widget_get_allocated_width(vc->gfx.drawing_area);
     wh = gtk_widget_get_allocated_height(vc->gfx.drawing_area);
     pw = ww * gs;
@@ -112,12 +159,17 @@ void gd_gl_area_draw(VirtualConsole *vc)
         }
 
         glViewport(0, 0, pw, ph);
-        y1 = vc->gfx.y0_top ? 0 : vc->gfx.h;
-        y2 = vc->gfx.y0_top ? vc->gfx.h : 0;
-        glBlitFramebuffer(0, y1, vc->gfx.w, y2,
-                          wx_offset * gs, wy_offset * gs,
-                          (ww - wx_offset) * gs, (wh - wy_offset) * gs,
-                          GL_COLOR_BUFFER_BIT, GL_NEAREST);
+        if (vc->gfx.stereo.layout) {
+            gd_gl_area_draw_stereo(vc, gs, wx_offset, wy_offset,
+                                   ww_surface, wh_surface);
+        } else {
+            y1 = vc->gfx.y0_top ? 0 : vc->gfx.h;
+            y2 = vc->gfx.y0_top ? vc->gfx.h : 0;
+            glBlitFramebuffer(0, y1, vc->gfx.w, y2,
+                              wx_offset * gs, wy_offset * gs,
+                              (ww - wx_offset) * gs, (wh - wy_offset) * gs,
+                              GL_COLOR_BUFFER_BIT, GL_NEAREST);
+        }
 #ifdef CONFIG_GBM
         if (dmabuf) {
             sync = egl_create_sync();
@@ -181,14 +233,13 @@ void gd_gl_area_switch(DisplayChangeListener *dcl,
                        DisplaySurface *surface)
 {
     VirtualConsole *vc = container_of(dcl, VirtualConsole, gfx.dcl);
-    bool resized = true;
+    int old_fbw = 0, old_fbh = 0, fbw, fbh;
+    bool resized;
 
     trace_gd_switch(vc->label, surface_width(surface), surface_height(surface));
 
-    if (vc->gfx.ds &&
-        surface_width(vc->gfx.ds) == surface_width(surface) &&
-        surface_height(vc->gfx.ds) == surface_height(surface)) {
-        resized = false;
+    if (vc->gfx.ds) {
+        gd_fb_size(vc, &old_fbw, &old_fbh);
     }
 
     if (vc->gfx.gls) {
@@ -197,6 +248,8 @@ void gd_gl_area_switch(DisplayChangeListener *dcl,
         surface_gl_create_texture(vc->gfx.gls, surface);
     }
     vc->gfx.ds = surface;
+    gd_fb_size(vc, &fbw, &fbh);
+    resized = fbw != old_fbw || fbh != old_fbh;
 
     if (resized) {
         gd_update_windowsize(vc);
@@ -288,12 +341,22 @@ void gd_gl_area_scanout_texture(DisplayChangeListener *dcl,
                                 void *d3d_tex2d)
 {
     VirtualConsole *vc = container_of(dcl, VirtualConsole, gfx.dcl);
+    int old_fbw = 0, old_fbh = 0, fbw, fbh;
 
     vc->gfx.x = x;
     vc->gfx.y = y;
     vc->gfx.w = w;
     vc->gfx.h = h;
     vc->gfx.y0_top = backing_y_0_top;
+
+    if (vc->gfx.ds) {
+        gd_fb_size(vc, &old_fbw, &old_fbh);
+        gd_update_stereo(vc, w, h);
+        gd_fb_size(vc, &fbw, &fbh);
+        if (fbw != old_fbw || fbh != old_fbh) {
+            gd_update_windowsize(vc);
+        }
+    }
 
     gtk_gl_area_make_current(GTK_GL_AREA(vc->gfx.drawing_area));
 
@@ -312,6 +375,7 @@ void gd_gl_area_scanout_disable(DisplayChangeListener *dcl)
     VirtualConsole *vc = container_of(dcl, VirtualConsole, gfx.dcl);
 
     gtk_gl_area_set_scanout_mode(vc, false);
+    gd_update_stereo(vc, 0, 0);
 }
 
 void gd_gl_area_scanout_flush(DisplayChangeListener *dcl,
