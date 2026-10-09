@@ -1,3 +1,43 @@
+================
+Sparky Stereo OS
+================
+
+.. image:: .github/sparky-stereo-os/sparkyos-swirl-dark-128.png
+   :alt: SparkyOS
+   :width: 128
+
+This is the stereo version of QEMU by Sparky Stereo OS, forked from
+`qemu-project/qemu <https://gitlab.com/qemu-project/qemu>`_.
+Its virtio-gpu device offers the guest the HDMI 1.4b 3D modes in its EDID and
+takes the layout of each frame from the guest's driver
+(``-device virtio-gpu-pci,stereo=on``); QEMU's GTK window and SPICE clients
+then show the guest in stereo on Stereo KWin.
+See `A virtual machine with a 3D display
+<https://github.com/Sparky-OS/sparky-stereo-os/blob/main/docs/stereo-vm.md>`_.
+
+QEMU's contribution policy (``docs/devel/code-provenance.rst``) declines code
+generated with AI tools. These changes were written with AI assistance, so
+they are carried here and not sent to QEMU.
+
+Where it comes from:
+
+* `QEMU <https://www.qemu.org/>`_ was started by Fabrice Bellard and is
+  developed by its community; see MAINTAINERS.
+* `Debian <https://www.debian.org/>`_ is the base of the system.
+* `SparkyLinux <https://sparkylinux.org/>`_, by Paweł "pavroo" Pijanowski,
+  builds on Debian.
+* `Sparky Stereo OS <https://github.com/Sparky-OS/sparky-stereo-os>`_ is the
+  stereo 3D edition of SparkyLinux: SparkyOS, powered by Debian.
+
+The ``stereo3d`` branch holds the changes on QEMU's development branch; the
+distribution's ``qemu`` package carries the same changes on QEMU 11.1.2.
+The licences are unchanged; see COPYING and LICENSE.
+
+Sparky Stereo OS, Daniel Ramos's edition of SparkyLinux (by Paweł "pavroo"
+Pijanowski).
+
+----
+
 ===========
 QEMU README
 ===========
