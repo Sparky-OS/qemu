@@ -188,10 +188,23 @@ static void tablet_position(SpiceTabletInstance* sin, int x, int y,
                             uint32_t buttons_state)
 {
     QemuSpicePointer *pointer = container_of(sin, QemuSpicePointer, tablet);
+    const QemuStereo *stereo = qemu_console_get_stereo(qemu_console_lookup_default());
+    int width = pointer->width;
+    int height = pointer->height;
 
+    if (stereo) {
+        /*
+         * A client's position is in the primary surface, and the guest's
+         * pointer range is one view of it: the left one, which clients show.
+         */
+        x = CLAMP(x - stereo->left.x, 0, stereo->left.width - 1);
+        y = CLAMP(y - stereo->left.y, 0, stereo->left.height - 1);
+        width = stereo->left.width;
+        height = stereo->left.height;
+    }
     spice_update_buttons(pointer, 0, buttons_state);
-    qemu_input_queue_abs(NULL, INPUT_AXIS_X, x, 0, pointer->width);
-    qemu_input_queue_abs(NULL, INPUT_AXIS_Y, y, 0, pointer->height);
+    qemu_input_queue_abs(NULL, INPUT_AXIS_X, x, 0, width);
+    qemu_input_queue_abs(NULL, INPUT_AXIS_Y, y, 0, height);
     qemu_input_event_sync();
 }
 
