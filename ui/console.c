@@ -727,6 +727,32 @@ int qemu_console_set_ui_info(QemuConsole *con, QemuUIInfo *info, bool delay)
     return 0;
 }
 
+/*
+ * qemu_console_set_stereo:
+ * @con: the console
+ * @stereo: the views of the following scanouts, or NULL for 2D
+ *
+ * Displays read it with qemu_console_get_stereo() when the next surface
+ * or GL scanout arrives.
+ */
+void qemu_console_set_stereo(QemuConsole *con, const QemuStereo *stereo)
+{
+    if (stereo && stereo->left.width && stereo->left.height &&
+        stereo->right.width && stereo->right.height) {
+        con->stereo = *stereo;
+    } else {
+        con->stereo = (QemuStereo) { 0 };
+    }
+}
+
+const QemuStereo *qemu_console_get_stereo(QemuConsole *con)
+{
+    if (!con || !con->stereo.layout) {
+        return NULL;
+    }
+    return &con->stereo;
+}
+
 void qemu_console_update(QemuConsole *con, int x, int y, int w, int h)
 {
     DisplayState *s = con->ds;

@@ -8,6 +8,7 @@
 #include "ui/input.h"
 #include "ui/surface.h"
 #include "ui/dmabuf.h"
+#include "ui/rect.h"
 
 #define TYPE_QEMU_CONSOLE "qemu-console"
 OBJECT_DECLARE_TYPE(QemuConsole, QemuConsoleClass, QEMU_CONSOLE)
@@ -116,6 +117,19 @@ typedef struct QemuUIInfo {
     uint32_t  height;
     uint32_t  refresh_rate;
 } QemuUIInfo;
+
+/*
+ * A stereo scanout: each view's place in the surface (or scanout) and the
+ * size a view is shown at.  Layout numbers follow the virtio-gpu protocol
+ * (the HDMI 1.4b 3D structures, 0 for 2D).
+ */
+typedef struct QemuStereo {
+    uint32_t layout;
+    uint32_t width;
+    uint32_t height;
+    QemuRect left;
+    QemuRect right;
+} QemuStereo;
 
 /* cursor data format is 32bit RGBA */
 typedef struct QEMUCursor {
@@ -284,6 +298,9 @@ void qemu_console_unregister_listener(DisplayChangeListener *dcl);
 bool qemu_console_ui_info_supported(const QemuConsole *con);
 const QemuUIInfo *qemu_console_get_ui_info(const QemuConsole *con);
 int qemu_console_set_ui_info(QemuConsole *con, QemuUIInfo *info, bool delay);
+
+void qemu_console_set_stereo(QemuConsole *con, const QemuStereo *stereo);
+const QemuStereo *qemu_console_get_stereo(QemuConsole *con);
 
 void qemu_console_update(QemuConsole *con, int x, int y, int w, int h);
 void qemu_console_update_full(QemuConsole *con);

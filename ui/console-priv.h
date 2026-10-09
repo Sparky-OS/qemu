@@ -22,6 +22,7 @@ struct QemuConsole {
     int window_id;
     QemuUIInfo ui_info;
     QEMUTimer *ui_timer;
+    QemuStereo stereo;
     const GraphicHwOps *hw_ops;
     void *hw;
     CoQueue dump_queue;
