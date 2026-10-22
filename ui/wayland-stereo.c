@@ -2,11 +2,14 @@
  * Stereo scanouts on a Wayland subsurface
  *
  * The two views of a stereo scanout go to the compositor side by side,
- * left view first, each at full size, on a subsurface of the display's
- * window, with a viewport that gives it the size of one view.  The
- * subsurface is declared once as full side by side through
- * libstereo-declare (KWin's stereo content protocol); it takes no input,
- * which goes to the window below it.
+ * left view first, each at the resolution the guest scans it out at, on a
+ * subsurface of the display's window, with a viewport that gives it the
+ * size one view is shown at.  The views are copied, never scaled: a
+ * top-and-bottom 1920x1080 frame becomes one 3840x540 buffer, a side by
+ * side (half) one two 960x1080 views, and the compositor resizes them once
+ * to the viewport.  The subsurface is declared once as full side by side
+ * through libstereo-declare (KWin's stereo content protocol); it takes no
+ * input, which goes to the window below it.
  *
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
@@ -204,29 +207,13 @@ static QemuWaylandStereoBuffer *buffer_get(QemuWaylandStereo *ws,
     return NULL;
 }
 
-/* Scales one view of the frame to width x height at dst_x in dst. */
-static void unpack_view(pixman_image_t *frame, const QemuRect *view,
-                        pixman_image_t *dst, int dst_x, int width, int height)
+/* Copies one view of the frame, at its own size, to dst_x in dst. */
+static void copy_view(pixman_image_t *frame, const QemuRect *view,
+                      pixman_image_t *dst, int dst_x)
 {
-    pixman_format_code_t format = pixman_image_get_format(frame);
-    int stride = pixman_image_get_stride(frame);
-    uint8_t *data = (uint8_t *)pixman_image_get_data(frame) +
-                    view->y * stride + view->x * PIXMAN_FORMAT_BPP(format) / 8;
-    pixman_image_t *src;
-    pixman_transform_t transform;
-
-    /* a view of its own, so filtering never reaches into the other one */
-    src = pixman_image_create_bits(format, view->width, view->height,
-                                   (uint32_t *)data, stride);
-    pixman_transform_init_scale(&transform,
-        pixman_double_to_fixed((double)view->width / width),
-        pixman_double_to_fixed((double)view->height / height));
-    pixman_image_set_transform(src, &transform);
-    pixman_image_set_repeat(src, PIXMAN_REPEAT_PAD);
-    pixman_image_set_filter(src, PIXMAN_FILTER_BILINEAR, NULL, 0);
-    pixman_image_composite(PIXMAN_OP_SRC, src, NULL, dst,
-                           0, 0, 0, 0, dst_x, 0, width, height);
-    pixman_image_unref(src);
+    pixman_image_composite(PIXMAN_OP_SRC, frame, NULL, dst,
+                           view->x, view->y, 0, 0, dst_x, 0,
+                           view->width, view->height);
 }
 
 void qemu_wayland_stereo_show(QemuWaylandStereo *ws, pixman_image_t *frame,
@@ -235,15 +222,19 @@ void qemu_wayland_stereo_show(QemuWaylandStereo *ws, pixman_image_t *frame,
 {
     QemuWaylandStereoBuffer *buf;
 
+    /* every 3D structure gives both views one size */
+    if (stereo->left.width != stereo->right.width ||
+        stereo->left.height != stereo->right.height) {
+        return;
+    }
+
     wl_display_dispatch_queue_pending(wl.display, wl.queue);
-    buf = buffer_get(ws, stereo->width * 2, stereo->height);
+    buf = buffer_get(ws, stereo->left.width * 2, stereo->left.height);
     if (!buf) {
         return;
     }
-    unpack_view(frame, &stereo->left, buf->image, 0,
-                stereo->width, stereo->height);
-    unpack_view(frame, &stereo->right, buf->image, stereo->width,
-                stereo->width, stereo->height);
+    copy_view(frame, &stereo->left, buf->image, 0);
+    copy_view(frame, &stereo->right, buf->image, stereo->left.width);
 
     if (!ws->declared) {
         stereo_declare_wayland(ws->surface, STEREO_SBS_FULL,
