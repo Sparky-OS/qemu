@@ -57,9 +57,22 @@ static void gd_gl_area_draw_stereo(VirtualConsole *vc, int gs,
         sy0 = left->y + left->height;
         sy1 = left->y;
     }
-    glBlitFramebuffer(left->x, sy0, left->x + left->width, sy1,
-                      x * gs, y * gs, (x + w) * gs, (y + h) * gs,
-                      GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    if (vc->gfx.stereo.layout == 3) {
+        int rows = vc->gfx.stereo.height;
+        for (int row = 0; row < rows; row++) {
+            int src0 = vc->gfx.y0_top ? vc->gfx.h - 2 * row - 1 : 2 * row + 1;
+            int src1 = vc->gfx.y0_top ? src0 + 1 : src0 - 1;
+            int dst0 = y * gs + (int)((int64_t)h * gs * (rows - row - 1) / rows);
+            int dst1 = y * gs + (int)((int64_t)h * gs * (rows - row) / rows);
+            glBlitFramebuffer(0, src0, vc->gfx.stereo.width, src1,
+                              x * gs, dst0, (x + w) * gs, dst1,
+                              GL_COLOR_BUFFER_BIT, GL_NEAREST);
+        }
+    } else {
+        glBlitFramebuffer(left->x, sy0, left->x + left->width, sy1,
+                          x * gs, y * gs, (x + w) * gs, (y + h) * gs,
+                          GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    }
 
     data = g_malloc((size_t)stride * vc->gfx.h);
     glPixelStorei(GL_PACK_ALIGNMENT, 4);

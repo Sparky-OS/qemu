@@ -291,9 +291,18 @@ void gd_update_stereo(VirtualConsole *vc, int w, int h)
 {
     const QemuStereo *stereo = qemu_console_get_stereo(vc->gfx.dcl.con);
 
-    if (stereo && stereo->width && stereo->height &&
+    bool lines = stereo && stereo->layout == 3 &&
+                 stereo->width && stereo->height && w > 0 && h > 0 &&
+                 stereo->width <= (unsigned)w &&
+                 stereo->height <= (unsigned)h / 2 &&
+                 !stereo->left.x && !stereo->left.y &&
+                 !stereo->left.width && !stereo->left.height &&
+                 !stereo->right.x && !stereo->right.y &&
+                 !stereo->right.width && !stereo->right.height;
+
+    if (lines || (stereo && stereo->width && stereo->height &&
         gd_stereo_view_valid(&stereo->left, w, h) &&
-        gd_stereo_view_valid(&stereo->right, w, h)) {
+        gd_stereo_view_valid(&stereo->right, w, h))) {
         vc->gfx.stereo = *stereo;
     } else {
         vc->gfx.stereo = (QemuStereo) { 0 };
@@ -1056,16 +1065,31 @@ static gboolean gd_draw_event(GtkWidget *widget, cairo_t *cr, void *opaque)
     if (vc->gfx.stereo.layout) {
         const QemuRect *left = &vc->gfx.stereo.left;
         cairo_surface_t *view;
+        int sample_width = left->width, sample_height = left->height;
 
-        /* the left view alone, so scaling never reaches into the right one */
-        view = cairo_surface_create_for_rectangle(vc->gfx.surface,
-                                                  left->x, left->y,
-                                                  left->width, left->height);
+        /* A strided view skips right rows without interpolating either eye. */
+        if (vc->gfx.stereo.layout == 3) {
+            int stride = cairo_image_surface_get_stride(vc->gfx.surface);
+            if (stride <= 0 || stride > INT_MAX / 2) {
+                return TRUE;
+            }
+            sample_width = vc->gfx.stereo.width;
+            sample_height = vc->gfx.stereo.height;
+            cairo_surface_flush(vc->gfx.surface);
+            view = cairo_image_surface_create_for_data(
+                cairo_image_surface_get_data(vc->gfx.surface),
+                cairo_image_surface_get_format(vc->gfx.surface),
+                sample_width, sample_height, stride * 2);
+        } else {
+            view = cairo_surface_create_for_rectangle(vc->gfx.surface,
+                                                      left->x, left->y,
+                                                      left->width, left->height);
+        }
         cairo_rectangle(cr, wx_offset, wy_offset, ww_surface, wh_surface);
         cairo_clip(cr);
         cairo_translate(cr, wx_offset, wy_offset);
-        cairo_scale(cr, vc->gfx.scale_x * fbw / left->width,
-                    vc->gfx.scale_y * fbh / left->height);
+        cairo_scale(cr, vc->gfx.scale_x * fbw / sample_width,
+                    vc->gfx.scale_y * fbh / sample_height);
         cairo_set_source_surface(cr, view, 0, 0);
         cairo_pattern_set_extend(cairo_get_source(cr), CAIRO_EXTEND_PAD);
         cairo_paint(cr);
