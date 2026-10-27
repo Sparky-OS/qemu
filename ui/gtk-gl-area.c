@@ -46,8 +46,15 @@ static void gd_gl_area_draw_stereo(VirtualConsole *vc, int gs,
     const QemuRect *left = &vc->gfx.stereo.left;
     pixman_image_t *frame;
     uint32_t *data;
-    int stride = vc->gfx.w * 4;
+    int stride;
     int sy0, sy1;
+
+    if (vc->gfx.w <= 0 || vc->gfx.h <= 0 ||
+        vc->gfx.w > INT_MAX / 4 ||
+        vc->gfx.h > INT_MAX / (4 * vc->gfx.w)) {
+        return;
+    }
+    stride = vc->gfx.w * 4;
 
     /* the blit below draws the frame's last row first, as the 2D path does */
     if (vc->gfx.y0_top) {
