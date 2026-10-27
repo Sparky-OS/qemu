@@ -121,7 +121,9 @@ typedef struct QemuUIInfo {
 /*
  * A stereo scanout: each view's place in the surface (or scanout) and the
  * size a view is shown at.  Layout numbers follow the virtio-gpu protocol
- * (the HDMI 1.4b 3D structures, 0 for 2D).
+ * (the HDMI 1.4b 3D structures, 0 for 2D). Zero rectangles do not mean 2D:
+ * line alternative has a width by 2 * height raster with left samples on
+ * even rows and right samples on odd rows (row zero first).
  */
 typedef struct QemuStereo {
     uint32_t layout;

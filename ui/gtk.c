@@ -282,6 +282,7 @@ void gd_fb_size(VirtualConsole *vc, int *fbw, int *fbh)
 static bool gd_stereo_view_valid(const QemuRect *view, int w, int h)
 {
     return view->x >= 0 && view->y >= 0 &&
+           view->width > 0 && view->height > 0 &&
            view->x + view->width <= w && view->y + view->height <= h;
 }
 

@@ -733,12 +733,12 @@ int qemu_console_set_ui_info(QemuConsole *con, QemuUIInfo *info, bool delay)
  * @stereo: the views of the following scanouts, or NULL for 2D
  *
  * Displays read it with qemu_console_get_stereo() when the next surface
- * or GL scanout arrives.
+ * or GL scanout arrives. Non-rectangular layouts still carry their layout
+ * and logical view size; each display validates how it can present them.
  */
 void qemu_console_set_stereo(QemuConsole *con, const QemuStereo *stereo)
 {
-    if (stereo && stereo->left.width && stereo->left.height &&
-        stereo->right.width && stereo->right.height) {
+    if (stereo && stereo->layout && stereo->width && stereo->height) {
         con->stereo = *stereo;
     } else {
         con->stereo = (QemuStereo) { 0 };
