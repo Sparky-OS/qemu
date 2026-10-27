@@ -207,13 +207,87 @@ static QemuWaylandStereoBuffer *buffer_get(QemuWaylandStereo *ws,
     return NULL;
 }
 
+static bool stereo_view_valid(const QemuRect *view, int width, int height)
+{
+    return view->x >= 0 && view->y >= 0 &&
+           view->width > 0 && view->height > 0 &&
+           view->width <= width && view->height <= height &&
+           view->x <= width - view->width &&
+           view->y <= height - view->height;
+}
+
+/* Native sample size, bounded by the source and the signed SHM pool size. */
+static bool stereo_frame_size(pixman_image_t *frame, const QemuStereo *stereo,
+                               int *width, int *height)
+{
+    int fw = pixman_image_get_width(frame);
+    int fh = pixman_image_get_height(frame);
+
+    if (!stereo->layout || !stereo->width || !stereo->height) {
+        return false;
+    }
+    if (stereo->layout == 3) {
+        if (stereo->left.x || stereo->left.y ||
+            stereo->left.width || stereo->left.height ||
+            stereo->right.x || stereo->right.y ||
+            stereo->right.width || stereo->right.height ||
+            stereo->width > (unsigned)fw ||
+            stereo->height > (unsigned)fh / 2) {
+            return false;
+        }
+        *width = stereo->width;
+        *height = stereo->height;
+    } else {
+        if (stereo->layout > 8 || !stereo_view_valid(&stereo->left, fw, fh) ||
+            !stereo_view_valid(&stereo->right, fw, fh) ||
+            stereo->left.width != stereo->right.width ||
+            stereo->left.height != stereo->right.height) {
+            return false;
+        }
+        *width = stereo->left.width;
+        *height = stereo->left.height;
+    }
+    return *width <= INT32_MAX / 8 &&
+           *height <= INT32_MAX / (8 * *width);
+}
+
+/* A native copy need not pass through Pixman's transformed-image limits. */
+static void copy_samples(pixman_image_t *frame, int x, int y, int w, int h,
+                         pixman_image_t *dst, int dst_x, int dst_y)
+{
+    if (pixman_image_get_format(frame) == pixman_image_get_format(dst) &&
+        pixman_blt(pixman_image_get_data(frame), pixman_image_get_data(dst),
+                   pixman_image_get_stride(frame) / 4,
+                   pixman_image_get_stride(dst) / 4,
+                   PIXMAN_FORMAT_BPP(pixman_image_get_format(frame)),
+                   PIXMAN_FORMAT_BPP(pixman_image_get_format(dst)),
+                   x, y, dst_x, dst_y, w, h)) {
+        return;
+    }
+    pixman_image_composite32(PIXMAN_OP_SRC, frame, NULL, dst,
+                             x, y, 0, 0, dst_x, dst_y, w, h);
+}
+
 /* Copies one view of the frame, at its own size, to dst_x in dst. */
 static void copy_view(pixman_image_t *frame, const QemuRect *view,
                       pixman_image_t *dst, int dst_x)
 {
-    pixman_image_composite(PIXMAN_OP_SRC, frame, NULL, dst,
-                           view->x, view->y, 0, 0, dst_x, 0,
-                           view->width, view->height);
+    copy_samples(frame, view->x, view->y, view->width, view->height,
+                  dst, dst_x, 0);
+}
+
+static void copy_stereo_frame(pixman_image_t *frame, const QemuStereo *stereo,
+                               pixman_image_t *dst, int width, int height)
+{
+    if (stereo->layout == 3) {
+        for (int y = 0; y < height; y++) {
+            copy_samples(frame, 0, 2 * y, width, 1, dst, 0, y);
+            copy_samples(frame, 0, 2 * y + 1, width, 1, dst, width, y);
+        }
+    } else {
+        copy_view(frame, &stereo->left, dst, 0);
+        copy_view(frame, &stereo->right, dst, width);
+    }
 }
 
 void qemu_wayland_stereo_show(QemuWaylandStereo *ws, pixman_image_t *frame,
@@ -221,20 +295,19 @@ void qemu_wayland_stereo_show(QemuWaylandStereo *ws, pixman_image_t *frame,
                               int x, int y, int width, int height)
 {
     QemuWaylandStereoBuffer *buf;
+    int sample_width, sample_height;
 
-    /* every 3D structure gives both views one size */
-    if (stereo->left.width != stereo->right.width ||
-        stereo->left.height != stereo->right.height) {
+    if (!stereo_frame_size(frame, stereo, &sample_width, &sample_height)) {
+        qemu_wayland_stereo_hide(ws);
         return;
     }
 
     wl_display_dispatch_queue_pending(wl.display, wl.queue);
-    buf = buffer_get(ws, stereo->left.width * 2, stereo->left.height);
+    buf = buffer_get(ws, sample_width * 2, sample_height);
     if (!buf) {
         return;
     }
-    copy_view(frame, &stereo->left, buf->image, 0);
-    copy_view(frame, &stereo->right, buf->image, stereo->left.width);
+    copy_stereo_frame(frame, stereo, buf->image, sample_width, sample_height);
 
     if (!ws->declared) {
         stereo_declare_wayland(ws->surface, STEREO_SBS_FULL,
