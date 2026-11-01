@@ -200,6 +200,22 @@ static void qemu_spice_create_update(SimpleSpiceDisplay *ssd)
     int bpp = surface_bytes_per_pixel(ssd->ds);
     uint8_t *guest, *mirror;
 
+#ifdef CONFIG_SPICE_STEREO
+    if (ssd->stereo_refresh) {
+        QXLRect full = {
+            .right = surface_width(ssd->ds),
+            .bottom = surface_height(ssd->ds),
+        };
+
+        /* A new layout needs a new acquisition even when its pixels match the
+         * mirror. Capture the current surface here, after the switch. */
+        qemu_spice_create_one_update(ssd, &full);
+        ssd->stereo_refresh = false;
+        memset(&ssd->dirty, 0, sizeof(ssd->dirty));
+        return;
+    }
+#endif
+
     if (qemu_spice_rect_is_empty(&ssd->dirty)) {
         return;
     };
@@ -413,6 +429,7 @@ static void qemu_spice_update_stereo(SimpleSpiceDisplay *ssd)
         return;
     }
     ssd->stereo = *stereo;
+    ssd->stereo_refresh = true;
     qemu_spice_rect(&left, &stereo->left);
     qemu_spice_rect(&right, &stereo->right);
     spice_qxl_set_stereo(&ssd->qxl, stereo->layout,

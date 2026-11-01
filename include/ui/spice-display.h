@@ -86,6 +86,7 @@ struct SimpleSpiceDisplay {
     DisplaySurface *ds;
 #ifdef CONFIG_SPICE_STEREO
     QemuStereo stereo;
+    bool stereo_refresh;
 #endif
     DisplayGLCtx dgc;
     DisplayChangeListener dcl;
