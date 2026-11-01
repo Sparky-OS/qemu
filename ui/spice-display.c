@@ -145,7 +145,9 @@ static void qemu_spice_create_one_update(SimpleSpiceDisplay *ssd,
 
     bw       = rect->right - rect->left;
     bh       = rect->bottom - rect->top;
-    update->bitmap = g_malloc(bw * bh * 4);
+    g_assert(bw > 0 && bh > 0 &&
+             (size_t)bw <= SIZE_MAX / bh / sizeof(uint32_t));
+    update->bitmap = g_malloc_n((size_t)bw * bh, sizeof(uint32_t));
 
     drawable->bbox            = *rect;
     drawable->clip.type       = SPICE_CLIP_TYPE_NONE;
