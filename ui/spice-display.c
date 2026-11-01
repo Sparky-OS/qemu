@@ -207,8 +207,10 @@ static void qemu_spice_create_update(SimpleSpiceDisplay *ssd)
             .bottom = surface_height(ssd->ds),
         };
 
-        /* A new layout needs a new acquisition even when its pixels match the
-         * mirror. Capture the current surface here, after the switch. */
+        /*
+         * A new layout needs a new acquisition even when its pixels match the
+         * mirror. Capture the current surface here, after the switch.
+         */
         qemu_spice_create_one_update(ssd, &full);
         ssd->stereo_refresh = false;
         memset(&ssd->dirty, 0, sizeof(ssd->dirty));
