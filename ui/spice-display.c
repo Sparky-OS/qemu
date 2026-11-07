@@ -1077,6 +1077,9 @@ static void spice_gl_switch(DisplayChangeListener *dcl,
                                     surface_height(ssd->ds),
                                     fourcc);
 
+        /* the layout leads the scanout it describes, as in the CPU switch */
+        qemu_spice_update_stereo(ssd);
+
         /* note: spice server will close the fd */
         spice_server_gl_scanout(&ssd->qxl, fd,
                                 surface_width(ssd->ds),
@@ -1089,6 +1092,9 @@ static void spice_gl_switch(DisplayChangeListener *dcl,
         qemu_spice_gl_monitor_config(ssd, 0, 0,
                                      surface_width(ssd->ds),
                                      surface_height(ssd->ds));
+    } else {
+        /* the console went dark: its layout goes with the surface */
+        qemu_spice_update_stereo(ssd);
     }
 }
 
