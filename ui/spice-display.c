@@ -976,6 +976,14 @@ static void spice_gl_update(DisplayChangeListener *dcl,
     ssd->gl_updates++;
 }
 
+/* a test switch: QEMU_SPICE_LINEAR_FAIL=gbm,memobj makes those routes fail */
+static bool spice_linear_route_disabled(const char *route)
+{
+    const char *fail = g_getenv("QEMU_SPICE_LINEAR_FAIL");
+
+    return fail && strstr(fail, route);
+}
+
 #ifdef CONFIG_GBM
 static void spice_gl_free_linear_texture(SimpleSpiceDisplay *ssd)
 {
@@ -1046,7 +1054,8 @@ static bool spice_gl_replace_with_gbm_linear(SimpleSpiceDisplay *ssd,
     struct gbm_bo *bo;
     int i, fd;
 
-    if (!qemu_egl_rn_gbm_dev || surface_bits_per_pixel(ssd->ds) != 32) {
+    if (!qemu_egl_rn_gbm_dev || surface_bits_per_pixel(ssd->ds) != 32 ||
+        spice_linear_route_disabled("gbm")) {
         return false;
     }
     /* LINEAR alone: NVIDIA's GBM refuses LINEAR together with RENDERING */
@@ -1132,10 +1141,18 @@ static bool spice_gl_replace_fd_texture(SimpleSpiceDisplay *ssd,
      * We really want to ensure that the memory layout of the texture
      * is linear; otherwise, the encoder's output may show corruption.
      */
-    if (!surface_gl_create_texture_from_fd(ssd->ds, fds[0], &texture,
+    if (spice_linear_route_disabled("memobj") ||
+        !surface_gl_create_texture_from_fd(ssd->ds, fds[0], &texture,
                                            &mem_obj)) {
-        error_report("spice: cannot create new texture from fd");
-        return false;
+        /*
+         * No linear buffer can be made. Publish the tiled one all the same:
+         * a client that takes the DMA-BUF (GL scanout) reads it right, and the
+         * server refuses to encode it for any other client and tells that
+         * client why. Giving nothing at all would blank every client.
+         */
+        warn_report_once("spice: no linear scanout can be made, a client "
+                         "without GL scanout will be refused the picture");
+        return true;
     }
 
     /*
@@ -1171,6 +1188,9 @@ static bool spice_gl_replace_fd_texture(SimpleSpiceDisplay *ssd,
         if (!ret) {
             surface_gl_destroy_texture(ssd->gls, ssd->ds);
             warn_report("spice: no texture available to display");
+        } else {
+            warn_report_once("spice: no linear scanout can be made, a client "
+                             "without GL scanout will be refused the picture");
         }
     } else {
         surface_gl_destroy_texture(ssd->gls, ssd->ds);
