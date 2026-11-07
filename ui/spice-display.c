@@ -29,9 +29,23 @@
 #include "ui/spice-display.h"
 
 #include "standard-headers/drm/drm_fourcc.h"
+#include <spice/protocol.h>
 
 bool spice_opengl;
 bool spice_remote_client;
+
+#ifdef HAVE_SPICE_GL
+/*
+ * Who needs the scanout in a linear layout: a remote client (the server was
+ * configured with a TCP port) and any client without GL scanout, local or not,
+ * because the encoder maps the DMA-BUF as linear memory and ignores its
+ * modifier.
+ */
+static bool spice_linear_scanout_wanted(SimpleSpiceDisplay *ssd)
+{
+    return spice_remote_client || qatomic_read(&ssd->encoded_client);
+}
+#endif
 int spice_max_refresh_rate;
 
 static GPtrArray *spice_displays;
@@ -713,7 +727,22 @@ static void interface_set_client_capabilities(QXLInstance *sin,
                                               uint8_t client_present,
                                               uint8_t caps[58])
 {
-    /* nothing to do */
+#ifdef HAVE_SPICE_GL
+    SimpleSpiceDisplay *ssd = container_of(sin, SimpleSpiceDisplay, qxl);
+    /*
+     * The server keeps, for each capability it lists, only what every client
+     * has: without the GL scanout bit some client cannot take the DMA-BUF and
+     * is sent the picture encoded, which needs a linear layout.
+     */
+    const bool encoded = client_present &&
+        !(caps[SPICE_DISPLAY_CAP_GL_SCANOUT / 8] &
+          (1 << (SPICE_DISPLAY_CAP_GL_SCANOUT % 8)));
+
+    if (spice_opengl && ssd->linear_bh &&
+        qatomic_xchg(&ssd->encoded_client, encoded) != encoded) {
+        qemu_bh_schedule(ssd->linear_bh);
+    }
+#endif
 }
 
 static int interface_client_monitors_config(QXLInstance *sin,
@@ -905,7 +934,8 @@ static void spice_gl_refresh(DisplayChangeListener *dcl)
     }
 
     if (qemu_console_is_gl_blocked(ssd->dcl.con)) {
-        if (spice_remote_client && ssd->gl_updates && ssd->have_scanout) {
+        if (spice_linear_scanout_wanted(ssd) && ssd->gl_updates &&
+            ssd->have_scanout) {
             glFlush();
             spice_gl_draw(ssd, 0, 0,
                           surface_width(ssd->ds), surface_height(ssd->ds));
@@ -945,7 +975,7 @@ static bool spice_gl_replace_fd_texture(SimpleSpiceDisplay *ssd,
     int fourcc;
     bool ret;
 
-    if (!spice_remote_client) {
+    if (!spice_linear_scanout_wanted(ssd)) {
         return true;
     }
 
@@ -1039,62 +1069,89 @@ static void spice_server_gl_scanout(QXLInstance *qxl,
 #endif
 }
 
+/*
+ * Export the surface's texture, give it a linear layout when a client needs
+ * one, and hand it to the server as the scanout.
+ */
+static bool spice_gl_publish_surface(SimpleSpiceDisplay *ssd)
+{
+    uint32_t offset[DMABUF_MAX_PLANES], stride[DMABUF_MAX_PLANES];
+    int fd[DMABUF_MAX_PLANES], num_planes, fourcc;
+    uint64_t modifier;
+
+    if (!egl_dmabuf_export_texture(ssd->ds->texture,
+                                   fd,
+                                   (EGLint *)offset,
+                                   (EGLint *)stride,
+                                   &fourcc,
+                                   &num_planes,
+                                   &modifier)) {
+        return false;
+    }
+
+    if (!spice_gl_replace_fd_texture(ssd, fd, &modifier, &num_planes)) {
+        return false;
+    }
+
+    trace_qemu_spice_gl_surface(ssd->qxl.id,
+                                surface_width(ssd->ds),
+                                surface_height(ssd->ds),
+                                fourcc);
+
+    /* the layout leads the scanout it describes, as in the CPU switch */
+    qemu_spice_update_stereo(ssd);
+
+    /* note: spice server will close the fd */
+    spice_server_gl_scanout(&ssd->qxl, fd,
+                            surface_width(ssd->ds),
+                            surface_height(ssd->ds),
+                            offset, stride, num_planes,
+                            fourcc, modifier, false);
+    ssd->have_surface = true;
+    ssd->have_scanout = false;
+
+    qemu_spice_gl_monitor_config(ssd, 0, 0,
+                                 surface_width(ssd->ds),
+                                 surface_height(ssd->ds));
+    return true;
+}
+
 static void spice_gl_switch(DisplayChangeListener *dcl,
                             struct DisplaySurface *new_surface)
 {
     SimpleSpiceDisplay *ssd = container_of(dcl, SimpleSpiceDisplay, dcl);
-    bool ret;
 
     if (ssd->ds) {
         surface_gl_destroy_texture(ssd->gls, ssd->ds);
     }
     ssd->ds = new_surface;
     if (ssd->ds) {
-        uint32_t offset[DMABUF_MAX_PLANES], stride[DMABUF_MAX_PLANES];
-        int fd[DMABUF_MAX_PLANES], num_planes, fourcc;
-        uint64_t modifier;
-
         surface_gl_create_texture(ssd->gls, ssd->ds);
-        if (!egl_dmabuf_export_texture(ssd->ds->texture,
-                                       fd,
-                                       (EGLint *)offset,
-                                       (EGLint *)stride,
-                                       &fourcc,
-                                       &num_planes,
-                                       &modifier)) {
+        if (!spice_gl_publish_surface(ssd)) {
             surface_gl_destroy_texture(ssd->gls, ssd->ds);
             return;
         }
-
-        ret = spice_gl_replace_fd_texture(ssd, fd, &modifier, &num_planes);
-        if (!ret) {
-            surface_gl_destroy_texture(ssd->gls, ssd->ds);
-            return;
-        }
-
-        trace_qemu_spice_gl_surface(ssd->qxl.id,
-                                    surface_width(ssd->ds),
-                                    surface_height(ssd->ds),
-                                    fourcc);
-
-        /* the layout leads the scanout it describes, as in the CPU switch */
-        qemu_spice_update_stereo(ssd);
-
-        /* note: spice server will close the fd */
-        spice_server_gl_scanout(&ssd->qxl, fd,
-                                surface_width(ssd->ds),
-                                surface_height(ssd->ds),
-                                offset, stride, num_planes,
-                                fourcc, modifier, false);
-        ssd->have_surface = true;
-        ssd->have_scanout = false;
-
-        qemu_spice_gl_monitor_config(ssd, 0, 0,
-                                     surface_width(ssd->ds),
-                                     surface_height(ssd->ds));
     } else {
         /* the console went dark: its layout goes with the surface */
         qemu_spice_update_stereo(ssd);
+    }
+}
+
+/*
+ * A client that cannot take the DMA-BUF connected (or the last one left) after
+ * the surface was published: publish it again, linear when one is needed.
+ */
+static void spice_gl_linear_bh(void *opaque)
+{
+    SimpleSpiceDisplay *ssd = opaque;
+
+    if (!ssd->have_surface || !ssd->ds || !ssd->ds->texture ||
+        !spice_linear_scanout_wanted(ssd)) {
+        return;
+    }
+    qemu_egl_make_context_current(&ssd->dgc, qemu_egl_rn_ctx);
+    if (!spice_gl_publish_surface(ssd)) {
+        warn_report("spice: cannot publish a linear scanout for the client");
     }
 }
 
@@ -1118,7 +1175,8 @@ static void qemu_spice_gl_scanout_disable(DisplayChangeListener *dcl)
      * to unblock it. Otherwise, newer updates would not take effect.
      */
     if (qemu_console_is_gl_blocked(ssd->dcl.con)) {
-        if (spice_remote_client && ssd->gl_updates && ssd->have_scanout) {
+        if (spice_linear_scanout_wanted(ssd) && ssd->gl_updates &&
+            ssd->have_scanout) {
             ssd->gl_updates = 0;
             qemu_spice_gl_block(ssd, false);
         }
@@ -1155,7 +1213,7 @@ static void qemu_spice_gl_scanout_texture(DisplayChangeListener *dcl,
     trace_qemu_spice_gl_scanout_texture(ssd->qxl.id, w, h, fourcc);
     qemu_spice_update_stereo(ssd);
 
-    if (spice_remote_client && modifier != DRM_FORMAT_MOD_LINEAR) {
+    if (spice_linear_scanout_wanted(ssd) && modifier != DRM_FORMAT_MOD_LINEAR) {
         egl_fb_destroy(&ssd->guest_fb);
         egl_fb_setup_for_tex(&ssd->guest_fb,
                              backing_width, backing_height,
@@ -1387,7 +1445,7 @@ static void qemu_spice_gl_update(DisplayChangeListener *dcl,
         glFlush();
     }
 
-    if (spice_remote_client && ssd->blit_scanout_texture) {
+    if (spice_linear_scanout_wanted(ssd) && ssd->blit_scanout_texture) {
         ret = spice_gl_blit_scanout_texture(ssd);
         if (!ret) {
             return;
@@ -1405,7 +1463,7 @@ static void qemu_spice_gl_update(DisplayChangeListener *dcl,
      * Guest updates are submitted at a steady rate (e.g. 60 FPS) instead
      * of submitting them arbitrarily.
      */
-    if (spice_remote_client) {
+    if (spice_linear_scanout_wanted(ssd)) {
         ssd->gl_updates++;
     } else {
         spice_gl_draw(ssd, x, y, w, h);
@@ -1460,6 +1518,7 @@ static void qemu_spice_display_init_one(QemuConsole *con)
         ops = &display_listener_gl_ops;
         ssd->dgc.ops = &gl_ctx_ops;
         ssd->gl_unblock_bh = qemu_bh_new(qemu_spice_gl_unblock_bh, ssd);
+        ssd->linear_bh = qemu_bh_new(spice_gl_linear_bh, ssd);
         ssd->gl_unblock_timer = timer_new_ms(QEMU_CLOCK_REALTIME,
                                              qemu_spice_gl_block_timer, ssd);
         ssd->gls = qemu_gl_init_shader();

@@ -141,6 +141,13 @@ struct SimpleSpiceDisplay {
     bool blit_scanout_texture;
     bool new_scanout_texture;
     bool have_hot;
+    /*
+     * A connected client cannot take the DMA-BUF (it has no GL scanout) and is
+     * sent the picture encoded, which reads the buffer as linear memory.
+     * Written by the SPICE server's thread, read in the main loop.
+     */
+    bool encoded_client;
+    QEMUBH *linear_bh;
 #endif
 };
 
