@@ -16,6 +16,9 @@
  */
 
 #include "qemu/osdep.h"
+#include <sys/mman.h>
+#include <sys/ioctl.h>
+#include <linux/dma-buf.h>
 #include "ui/qemu-spice.h"
 #include "qemu/error-report.h"
 #include "qemu/timer.h"
@@ -956,23 +959,149 @@ static void spice_gl_refresh(DisplayChangeListener *dcl)
     }
 }
 
+#ifdef CONFIG_GBM
+static void spice_gl_linear_copy(SimpleSpiceDisplay *ssd,
+                                 int x, int y, int w, int h);
+#endif
+
 static void spice_gl_update(DisplayChangeListener *dcl,
                             int x, int y, int w, int h)
 {
     SimpleSpiceDisplay *ssd = container_of(dcl, SimpleSpiceDisplay, dcl);
 
     surface_gl_update_texture(ssd->gls, ssd->ds, x, y, w, h);
+#ifdef CONFIG_GBM
+    spice_gl_linear_copy(ssd, x, y, w, h);
+#endif
     ssd->gl_updates++;
 }
 
-static bool spice_gl_replace_fd_texture(SimpleSpiceDisplay *ssd,
-                                        int *fds, uint64_t *modifier,
-                                        int *num_planes)
+#ifdef CONFIG_GBM
+static void spice_gl_free_linear_texture(SimpleSpiceDisplay *ssd)
 {
-    uint32_t offsets[DMABUF_MAX_PLANES], strides[DMABUF_MAX_PLANES];
+    if (ssd->gl_linear_map) {
+        munmap(ssd->gl_linear_map, ssd->gl_linear_size);
+        ssd->gl_linear_map = NULL;
+    }
+    if (ssd->gl_linear_fd >= 0) {
+        close(ssd->gl_linear_fd);
+        ssd->gl_linear_fd = -1;
+    }
+    if (ssd->gl_linear_bo) {
+        gbm_bo_destroy(ssd->gl_linear_bo);
+        ssd->gl_linear_bo = NULL;
+    }
+}
+
+static void spice_gl_linear_sync(SimpleSpiceDisplay *ssd, uint64_t flags)
+{
+    struct dma_buf_sync sync = { .flags = flags };
+
+    while (ioctl(ssd->gl_linear_fd, DMA_BUF_IOCTL_SYNC, &sync) < 0 &&
+           errno == EINTR) {
+    }
+}
+
+/* copy a rectangle of the surface into the linear buffer, row by row */
+static void spice_gl_linear_copy(SimpleSpiceDisplay *ssd,
+                                 int x, int y, int w, int h)
+{
+    const int sw = surface_width(ssd->ds), sh = surface_height(ssd->ds);
+    const uint8_t *src = surface_data(ssd->ds);
+    int r;
+
+    if (!ssd->gl_linear_map) {
+        return;
+    }
+    if (x < 0 || y < 0 || x >= sw || y >= sh) {
+        return;
+    }
+    w = MIN(w, sw - x);
+    h = MIN(h, sh - y);
+    spice_gl_linear_sync(ssd, DMA_BUF_SYNC_START | DMA_BUF_SYNC_WRITE);
+    for (r = 0; r < h; r++) {
+        memcpy((uint8_t *)ssd->gl_linear_map +
+                   (size_t)(y + r) * ssd->gl_linear_stride + (size_t)x * 4,
+               src + (size_t)(y + r) * surface_stride(ssd->ds) + (size_t)x * 4,
+               (size_t)w * 4);
+    }
+    spice_gl_linear_sync(ssd, DMA_BUF_SYNC_END | DMA_BUF_SYNC_WRITE);
+}
+
+/*
+ * Give the scanout a linear layout: the driver's own layout for a texture may
+ * be tiled (NVIDIA's block-linear one), which the server's encoder would read
+ * as linear memory. The surface's pixels live in CPU memory, so a linear GBM
+ * buffer is allocated, mapped, and the pixels are copied into it (here and on
+ * every update); it is what the server is handed. No GL import of the buffer
+ * is needed, which not every driver allows for a linear buffer.
+ */
+static bool spice_gl_replace_with_gbm_linear(SimpleSpiceDisplay *ssd,
+                                             int *fds, uint32_t *offsets,
+                                             uint32_t *strides, int *fourcc,
+                                             uint64_t *modifier,
+                                             int *num_planes)
+{
+    const uint32_t w = surface_width(ssd->ds), h = surface_height(ssd->ds);
+    struct gbm_bo *bo;
+    int i, fd;
+
+    if (!qemu_egl_rn_gbm_dev || surface_bits_per_pixel(ssd->ds) != 32) {
+        return false;
+    }
+    /* LINEAR alone: NVIDIA's GBM refuses LINEAR together with RENDERING */
+    bo = gbm_bo_create(qemu_egl_rn_gbm_dev, w, h, GBM_FORMAT_XRGB8888,
+                       GBM_BO_USE_LINEAR);
+    if (!bo) {
+        warn_report("spice: cannot allocate a linear GBM buffer");
+        return false;
+    }
+    fd = gbm_bo_get_fd(bo);
+    if (fd < 0) {
+        gbm_bo_destroy(bo);
+        return false;
+    }
+    spice_gl_free_linear_texture(ssd);
+    ssd->gl_linear_bo = bo;
+    ssd->gl_linear_fd = fd;
+    ssd->gl_linear_stride = gbm_bo_get_stride(bo);
+    ssd->gl_linear_size = (size_t)ssd->gl_linear_stride * h;
+    ssd->gl_linear_map = mmap(NULL, ssd->gl_linear_size,
+                              PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (ssd->gl_linear_map == MAP_FAILED) {
+        warn_report("spice: cannot map the linear GBM buffer");
+        ssd->gl_linear_map = NULL;
+        spice_gl_free_linear_texture(ssd);
+        return false;
+    }
+    spice_gl_linear_copy(ssd, 0, 0, w, h);
+
+    /* hand the server its own descriptor of the buffer */
+    for (i = 0; i < *num_planes; i++) {
+        close(fds[i]);
+        fds[i] = -1;
+    }
+    fds[0] = dup(ssd->gl_linear_fd);
+    if (fds[0] < 0) {
+        spice_gl_free_linear_texture(ssd);
+        return false;
+    }
+    offsets[0] = 0;
+    strides[0] = ssd->gl_linear_stride;
+    *fourcc = DRM_FORMAT_XRGB8888;
+    *modifier = DRM_FORMAT_MOD_LINEAR;
+    *num_planes = 1;
+    return true;
+}
+#endif
+
+static bool spice_gl_replace_fd_texture(SimpleSpiceDisplay *ssd,
+                                        int *fds, uint32_t *offsets,
+                                        uint32_t *strides, int *fourcc,
+                                        uint64_t *modifier, int *num_planes)
+{
     GLuint texture;
     GLuint mem_obj;
-    int fourcc;
     bool ret;
 
     if (!spice_linear_scanout_wanted(ssd)) {
@@ -987,6 +1116,17 @@ static bool spice_gl_replace_fd_texture(SimpleSpiceDisplay *ssd,
         error_report("spice: cannot replace texture with multiple planes");
         return false;
     }
+
+#ifdef CONFIG_GBM
+    /*
+     * a GBM buffer allocated linear works on every driver, the memory object
+     * route below only on Mesa
+     */
+    if (spice_gl_replace_with_gbm_linear(ssd, fds, offsets, strides, fourcc,
+                                         modifier, num_planes)) {
+        return true;
+    }
+#endif
 
     /*
      * We really want to ensure that the memory layout of the texture
@@ -1007,7 +1147,7 @@ static bool spice_gl_replace_fd_texture(SimpleSpiceDisplay *ssd,
                                     fds,
                                     (EGLint *)offsets,
                                     (EGLint *)strides,
-                                    &fourcc,
+                                    fourcc,
                                     num_planes,
                                     modifier);
     if (!ret) {
@@ -1025,7 +1165,7 @@ static bool spice_gl_replace_fd_texture(SimpleSpiceDisplay *ssd,
                                         fds,
                                         (EGLint *)offsets,
                                         (EGLint *)strides,
-                                        &fourcc,
+                                        fourcc,
                                         num_planes,
                                         modifier);
         if (!ret) {
@@ -1089,7 +1229,8 @@ static bool spice_gl_publish_surface(SimpleSpiceDisplay *ssd)
         return false;
     }
 
-    if (!spice_gl_replace_fd_texture(ssd, fd, &modifier, &num_planes)) {
+    if (!spice_gl_replace_fd_texture(ssd, fd, offset, stride, &fourcc,
+                                     &modifier, &num_planes)) {
         return false;
     }
 
@@ -1123,6 +1264,9 @@ static void spice_gl_switch(DisplayChangeListener *dcl,
 
     if (ssd->ds) {
         surface_gl_destroy_texture(ssd->gls, ssd->ds);
+#ifdef CONFIG_GBM
+        spice_gl_free_linear_texture(ssd);
+#endif
     }
     ssd->ds = new_surface;
     if (ssd->ds) {
@@ -1519,6 +1663,7 @@ static void qemu_spice_display_init_one(QemuConsole *con)
         ssd->dgc.ops = &gl_ctx_ops;
         ssd->gl_unblock_bh = qemu_bh_new(qemu_spice_gl_unblock_bh, ssd);
         ssd->linear_bh = qemu_bh_new(spice_gl_linear_bh, ssd);
+        ssd->gl_linear_fd = -1;
         ssd->gl_unblock_timer = timer_new_ms(QEMU_CLOCK_REALTIME,
                                              qemu_spice_gl_block_timer, ssd);
         ssd->gls = qemu_gl_init_shader();

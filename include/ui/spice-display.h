@@ -147,6 +147,15 @@ struct SimpleSpiceDisplay {
      * Written by the SPICE server's thread, read in the main loop.
      */
     bool encoded_client;
+    /*
+     * A linear GBM buffer the surface's pixels are copied to for the encoder:
+     * the buffer, its fd, its CPU mapping and its pitch.
+     */
+    void *gl_linear_bo;
+    int gl_linear_fd;
+    void *gl_linear_map;
+    size_t gl_linear_size;
+    uint32_t gl_linear_stride;
     QEMUBH *linear_bh;
 #endif
 };
