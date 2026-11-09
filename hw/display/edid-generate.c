@@ -52,10 +52,14 @@ static const struct edid_mode {
  * HDMI 1.4b 3D: with 3D_present, the sink takes frame packing and
  * top-and-bottom of 1080p24 and 720p50/60, and side by side (half) of
  * 1080i50/60 (the mandatory formats).  1080p60 lists every 3D structure
- * that keeps its views apart in one frame.
+ * that keeps its pictures apart in one frame: the two eyes, and the picture
+ * with its depth (L + depth), and with graphics and their depth (HDMI 1.4a,
+ * Appendix H, Table H-2: 3D_Structure_X 0100 and 0101).
  */
 #define HDMI_3D_FRAME_PACKING           0
 #define HDMI_3D_SIDE_BY_SIDE_FULL       3
+#define HDMI_3D_L_DEPTH                 4
+#define HDMI_3D_L_DEPTH_GFX_GFX_DEPTH   5
 #define HDMI_3D_TOP_AND_BOTTOM          6
 #define HDMI_3D_SIDE_BY_SIDE_HALF       8
 
@@ -125,6 +129,8 @@ static void edid_ext_dta_hdmi_3d(uint8_t *dta, uint32_t maxx, uint32_t maxy)
     static const uint8_t structures[] = {
         HDMI_3D_FRAME_PACKING,
         HDMI_3D_SIDE_BY_SIDE_FULL,
+        HDMI_3D_L_DEPTH,
+        HDMI_3D_L_DEPTH_GFX_GFX_DEPTH,
         HDMI_3D_TOP_AND_BOTTOM,
         HDMI_3D_SIDE_BY_SIDE_HALF,
     };
