@@ -460,7 +460,13 @@ struct virtio_gpu_set_scanout_blob {
 
 /*
  * VIRTIO_GPU_CMD_SET_SCANOUT_STEREO: the layout of the following scanouts,
- * with each view's place in the scanout rectangle and the size it is shown at.
+ * with each picture's place in the scanout rectangle and the size it is
+ * shown at.  @left and @right are the eyes; for L + depth and L + depth +
+ * graphics + graphics-depth they are the 2D picture and its depth, and
+ * @graphics and @graphics_depth the other two pictures of the second (HDMI
+ * 1.4a, Appendix H, Figures H-5 and H-6).  Pictures that are not rectangles
+ * of the frame are all zero.  A guest that knows only @left and @right sends
+ * the command up to them (VIRTIO_GPU_SET_SCANOUT_STEREO_EYES_SIZE bytes).
  */
 struct virtio_gpu_set_scanout_stereo {
 	struct virtio_gpu_ctrl_hdr hdr;
@@ -470,7 +476,13 @@ struct virtio_gpu_set_scanout_stereo {
 	uint32_t view_height;
 	struct virtio_gpu_rect left;
 	struct virtio_gpu_rect right;
+	struct virtio_gpu_rect graphics;
+	struct virtio_gpu_rect graphics_depth;
 };
+
+/* The command of a guest that sends only the two eyes. */
+#define VIRTIO_GPU_SET_SCANOUT_STEREO_EYES_SIZE \
+	offsetof(struct virtio_gpu_set_scanout_stereo, graphics)
 
 /* VIRTIO_GPU_CMD_RESOURCE_MAP_BLOB */
 struct virtio_gpu_resource_map_blob {

@@ -124,6 +124,10 @@ typedef struct QemuUIInfo {
  * (the HDMI 1.4b 3D structures, 0 for 2D). Zero rectangles do not mean 2D:
  * line alternative has a width by 2 * height raster with left samples on
  * even rows and right samples on odd rows (row zero first).
+ * For the layouts of a picture with its depth (L + depth, and L + depth +
+ * graphics + graphics-depth; HDMI 1.4a, Appendix H, Figures H-5 and H-6)
+ * @left is the 2D picture and @right its depth; the second layout also has
+ * the graphics picture and its depth in @graphics and @graphics_depth.
  */
 typedef struct QemuStereo {
     uint32_t layout;
@@ -131,6 +135,8 @@ typedef struct QemuStereo {
     uint32_t height;
     QemuRect left;
     QemuRect right;
+    QemuRect graphics;
+    QemuRect graphics_depth;
 } QemuStereo;
 
 /* cursor data format is 32bit RGBA */

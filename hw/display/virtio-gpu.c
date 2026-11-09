@@ -238,14 +238,31 @@ void virtio_gpu_get_edid(VirtIOGPU *g,
 void virtio_gpu_set_scanout_stereo(VirtIOGPU *g,
                                    struct virtio_gpu_ctrl_command *cmd)
 {
-    struct virtio_gpu_set_scanout_stereo ss;
+    struct virtio_gpu_set_scanout_stereo ss = { 0 };
     QemuStereo stereo;
+    size_t size;
 
-    VIRTIO_GPU_FILL_CMD(ss);
+    /*
+     * A guest that knows only the two eyes sends the command up to them; a
+     * guest that tells where the graphics pictures of L + depth + graphics +
+     * graphics-depth are sends the whole command.
+     */
+    size = iov_to_buf(cmd->elem.out_sg, cmd->elem.out_num, 0, &ss, sizeof(ss));
+    if (size != sizeof(ss) &&
+        size != VIRTIO_GPU_SET_SCANOUT_STEREO_EYES_SIZE) {
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "%s: command size incorrect %zu vs %zu\n",
+                      __func__, size, sizeof(ss));
+        cmd->error = VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER;
+        return;
+    }
     virtio_gpu_bswap_32(&ss, sizeof(ss));
     trace_virtio_gpu_cmd_set_scanout_stereo(ss.scanout_id, ss.layout,
                                             ss.view_width, ss.view_height,
-                                            ss.right.x, ss.right.y);
+                                            ss.right.x, ss.right.y,
+                                            ss.graphics.x, ss.graphics.y,
+                                            ss.graphics_depth.x,
+                                            ss.graphics_depth.y);
 
     if (!virtio_gpu_stereo_enabled(g->parent_obj.conf)) {
         cmd->error = VIRTIO_GPU_RESP_ERR_UNSPEC;
@@ -262,9 +279,29 @@ void virtio_gpu_set_scanout_stereo(VirtIOGPU *g,
         ss.left.x > INT16_MAX || ss.left.y > INT16_MAX ||
         ss.left.width > UINT16_MAX || ss.left.height > UINT16_MAX ||
         ss.right.x > INT16_MAX || ss.right.y > INT16_MAX ||
-        ss.right.width > UINT16_MAX || ss.right.height > UINT16_MAX) {
+        ss.right.width > UINT16_MAX || ss.right.height > UINT16_MAX ||
+        ss.graphics.x > INT16_MAX || ss.graphics.y > INT16_MAX ||
+        ss.graphics.width > UINT16_MAX || ss.graphics.height > UINT16_MAX ||
+        ss.graphics_depth.x > INT16_MAX || ss.graphics_depth.y > INT16_MAX ||
+        ss.graphics_depth.width > UINT16_MAX ||
+        ss.graphics_depth.height > UINT16_MAX) {
         qemu_log_mask(LOG_GUEST_ERROR, "%s: illegal stereo layout %d",
                       __func__, ss.layout);
+        cmd->error = VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER;
+        return;
+    }
+    /*
+     * HDMI 1.4a, Appendix H, Figure H-6: the second layout has four pictures,
+     * so a guest that sends only the two eyes (or empty rectangles) for it
+     * has not told where the graphics are.
+     */
+    if (ss.layout == VIRTIO_GPU_STEREO_L_DEPTH_GFX_GFX_DEPTH &&
+        (!ss.graphics.width || !ss.graphics.height ||
+         !ss.graphics_depth.width || !ss.graphics_depth.height)) {
+        qemu_log_mask(LOG_GUEST_ERROR,
+                      "%s: L + depth + graphics + graphics-depth without the"
+                      " rectangles of the graphics and their depth",
+                      __func__);
         cmd->error = VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER;
         return;
     }
@@ -278,6 +315,11 @@ void virtio_gpu_set_scanout_stereo(VirtIOGPU *g,
                    ss.left.width, ss.left.height);
     qemu_rect_init(&stereo.right, ss.right.x, ss.right.y,
                    ss.right.width, ss.right.height);
+    qemu_rect_init(&stereo.graphics, ss.graphics.x, ss.graphics.y,
+                   ss.graphics.width, ss.graphics.height);
+    qemu_rect_init(&stereo.graphics_depth, ss.graphics_depth.x,
+                   ss.graphics_depth.y, ss.graphics_depth.width,
+                   ss.graphics_depth.height);
     qemu_console_set_stereo(g->parent_obj.scanout[ss.scanout_id].con, &stereo);
 }
 
