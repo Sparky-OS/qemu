@@ -17,6 +17,8 @@
 #include "qemu/osdep.h"
 #include "qemu/error-report.h"
 #include "qemu/memfd.h"
+#include "qapi/error.h"
+#include "ui/stereo-depth.h"
 #include "ui/wayland-stereo.h"
 
 #include <wayland-client.h>
@@ -35,6 +37,7 @@ typedef struct QemuWaylandStereoBuffer {
 } QemuWaylandStereoBuffer;
 
 struct QemuWaylandStereo {
+    bool depth_failed;
     struct wl_surface *parent;
     struct wl_surface *surface;
     struct wl_subsurface *subsurface;
@@ -237,6 +240,16 @@ static bool stereo_frame_size(pixman_image_t *frame, const QemuStereo *stereo,
         }
         *width = stereo->width;
         *height = stereo->height;
+    } else if (qemu_stereo_layout_is_depth(stereo->layout)) {
+        /* the picture's size; the depth map may have another */
+        if (!stereo_view_valid(&stereo->left, fw, fh) ||
+            !stereo_view_valid(&stereo->right, fw, fh)) {
+            return false;
+        }
+        *width = stereo->left.width;
+        *height = stereo->left.height;
+        return *width <= INT32_MAX / 8 &&
+               *height <= INT32_MAX / (8 * *width);
     } else {
         if (stereo->layout > 8 || !stereo_view_valid(&stereo->left, fw, fh) ||
             !stereo_view_valid(&stereo->right, fw, fh) ||
@@ -276,9 +289,28 @@ static void copy_view(pixman_image_t *frame, const QemuRect *view,
                   dst, dst_x, 0);
 }
 
-static void copy_stereo_frame(pixman_image_t *frame, const QemuStereo *stereo,
-                               pixman_image_t *dst, int width, int height)
+static bool copy_stereo_frame(QemuWaylandStereo *ws, pixman_image_t *frame,
+                               const QemuStereo *stereo, pixman_image_t *dst,
+                               int width, int height)
 {
+    if (qemu_stereo_layout_is_depth(stereo->layout)) {
+        /* The common library draws the second view; nothing is stretched. */
+        Error *err = NULL;
+
+        if (!qemu_stereo_depth_render(frame, stereo, dst, &err)) {
+            /* Said once until a frame is drawn; the window shows the picture. */
+            if (!ws->depth_failed) {
+                error_reportf_err(err, "stereo display of a picture with its"
+                                  " depth: ");
+            } else {
+                error_free(err);
+            }
+            ws->depth_failed = true;
+            return false;
+        }
+        ws->depth_failed = false;
+        return true;
+    }
     if (stereo->layout == 3) {
         for (int y = 0; y < height; y++) {
             copy_samples(frame, 0, 2 * y, width, 1, dst, 0, y);
@@ -288,6 +320,7 @@ static void copy_stereo_frame(pixman_image_t *frame, const QemuStereo *stereo,
         copy_view(frame, &stereo->left, dst, 0);
         copy_view(frame, &stereo->right, dst, width);
     }
+    return true;
 }
 
 void qemu_wayland_stereo_show(QemuWaylandStereo *ws, pixman_image_t *frame,
@@ -307,7 +340,12 @@ void qemu_wayland_stereo_show(QemuWaylandStereo *ws, pixman_image_t *frame,
     if (!buf) {
         return;
     }
-    copy_stereo_frame(frame, stereo, buf->image, sample_width, sample_height);
+    if (!copy_stereo_frame(ws, frame, stereo, buf->image, sample_width,
+                           sample_height)) {
+        /* said by copy_stereo_frame(); the window shows the picture */
+        qemu_wayland_stereo_hide(ws);
+        return;
+    }
 
     if (!ws->declared) {
         stereo_declare_wayland(ws->surface, STEREO_SBS_FULL,

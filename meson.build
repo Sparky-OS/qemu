@@ -1943,6 +1943,7 @@ endif
 x11 = dependency('x11', method: 'pkg-config', required: gtkx11.found())
 
 stereo_declare = not_found
+stereo_dibr = not_found
 wayland_client = not_found
 wayland_protocols = not_found
 wayland_scanner = not_found
@@ -1960,6 +1961,9 @@ if get_option('stereo_declare') \
      wayland_scanner.found()
     stereo_declare = dependency('stereo-declare', method: 'pkg-config',
                                 required: get_option('stereo_declare'))
+    # A picture with its depth is drawn as two views by the common library.
+    stereo_dibr = dependency('stereo-dibr', method: 'pkg-config',
+                             required: get_option('stereo_declare'))
   endif
 endif
 

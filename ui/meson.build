@@ -171,8 +171,9 @@ if gtk.found()
                                  output: 'viewporter-protocol.c',
                                  command: [wayland_scanner, 'private-code',
                                            '@INPUT@', '@OUTPUT@'])
-    gtk_ss.add(stereo_declare, wayland_client,
-               files('wayland-stereo.c'), viewporter_h, viewporter_c)
+    gtk_ss.add(stereo_declare, stereo_dibr, wayland_client,
+               files('wayland-stereo.c', 'stereo-depth.c'), viewporter_h,
+               viewporter_c)
   endif
   ui_modules += {'gtk' : gtk_ss}
 endif
