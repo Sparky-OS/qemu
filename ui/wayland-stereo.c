@@ -348,8 +348,14 @@ void qemu_wayland_stereo_show(QemuWaylandStereo *ws, pixman_image_t *frame,
     }
 
     if (!ws->declared) {
-        stereo_declare_wayland(ws->surface, STEREO_SBS_FULL,
-                               STEREO_CLASS_NONE, STEREO_SUBCLASS_UNSPECIFIED);
+        if (stereo_declare_wayland(ws->surface, STEREO_SBS_FULL,
+                                   STEREO_CLASS_NONE,
+                                   STEREO_SUBCLASS_UNSPECIFIED) < 0) {
+            warn_report_once("wayland: the compositor refused the stereo "
+                             "declaration, this scanout shows its left view");
+            qemu_wayland_stereo_hide(ws);
+            return;
+        }
         ws->declared = true;
     }
     wl_subsurface_set_position(ws->subsurface, x, y);
