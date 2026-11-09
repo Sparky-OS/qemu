@@ -255,8 +255,9 @@ bool qemu_stereo_depth_render(pixman_image_t *frame, const QemuStereo *stereo,
         layer_gray = depth_gray(frame, &stereo->graphics_depth);
         /*
          * A graphics depth of 0 holds no graphics: the picture shows there.
-         * Appendix H gives the graphics no other transparency, so this is
-         * our reading (unverified, HDMI 1.4a Appendix H being a draft).
+         * This is an implementation choice, not a clause: Appendix H (a draft)
+         * gives the graphics no transparency of their own, and a graphics layer
+         * that is opaque everywhere would hide the picture altogether.
          */
         layer_table = g_memdup2(table, sizeof(float) << DEPTH_BITS);
         layer_table[0] = NAN;
